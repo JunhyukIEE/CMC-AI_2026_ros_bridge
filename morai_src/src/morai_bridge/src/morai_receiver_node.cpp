@@ -162,8 +162,7 @@ private:
         auto ego_msg = std::make_unique<morai_msgs::msg::EgoVehicleStatus>();
 
         // 1. Header 설정
-        ego_msg->header.stamp.sec = status->time_stamp_sec;
-        ego_msg->header.stamp.nanosec = status->time_stamp_nanosec;
+        ego_msg->header.stamp = this->now();
         ego_msg->header.frame_id = frame_id_;
         
         ego_msg->unique_id = 0; // or some unique id
