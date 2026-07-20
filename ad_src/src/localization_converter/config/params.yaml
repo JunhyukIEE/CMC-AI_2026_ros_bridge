@@ -1,0 +1,13 @@
+localization_converter_node:
+  ros__parameters:
+    # Input topics
+    ego_topic: "/Ego_topic"
+    gps_topic: "/gps"
+    imu_topic: "/imu"
+
+    # Output topics
+    odom_topic: "/odom"
+    twist_topic: "/twist"
+    pose_topic: "/pose"
+    gps_fix_topic: "/gps/fix"
+    imu_corrected_topic: "/imu/corrected"

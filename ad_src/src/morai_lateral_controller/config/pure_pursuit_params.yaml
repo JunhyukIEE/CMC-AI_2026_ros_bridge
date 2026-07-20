@@ -1,0 +1,12 @@
+pure_pursuit_controller:
+  ros__parameters:
+    # Vehicle parameters
+    wheelbase: 2.7 #1.04  # [m] Distance between front and rear axles
+
+    # Control parameters
+    steering_gain: 1.0  # Steering adjustment factor (fine-tuning)
+    control_rate: 20.0  # [Hz] Control loop rate
+
+    # Output limits
+    steering_max: 1.0    # Maximum steering angle command
+    steering_min: -1.0   # Minimum steering angle command

@@ -1,0 +1,19 @@
+waypoint_recorder_node:
+  ros__parameters:
+    # Subscription topic for odometry data
+    odom_topic: "/Ego/odom"
+
+    # Path to save the waypoints csv file
+    save_path: "/home/ljh/workspace/CMC-AI_2026/src/ad_src/src/waypoint_recorder/waypoints.csv"
+
+    # Minimum distance between consecutive waypoints to be recorded (meters)
+    distance_threshold: 1.0
+
+    # Topic to publish the full, continuous trajectory for visualization
+    trajectory_topic: "/full_trajectory"
+    
+    # Topic to publish markers at each recorded waypoint
+    marker_topic: "/waypoint_markers"
+
+    # The TF frame ID for all published visualization topics
+    frame_id: "odom"

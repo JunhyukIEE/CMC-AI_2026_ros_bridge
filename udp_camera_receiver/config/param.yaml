@@ -1,0 +1,69 @@
+/**:
+  ros__parameters:
+    # 디버그 모드 (패킷 정보 출력)
+    debug_mode: false
+
+    # 동기화 활성화
+    enable_sync: true
+    # 동기화 타임아웃 (초) - 이 시간 안에 모든 카메라 데이터가 도착하지 않으면 해당 프레임 ID 폐기
+    sync_timeout_sec: 0.1
+    # 동기화 윈도우 (밀리초) - 이 범위 내의 frame_id를 같은 프레임으로 취급
+    sync_window_ms: 100.0
+
+    # 최대 버퍼링할 프레임 수 (메모리 관리)
+    max_buffered_frames: 5
+
+    # 프레임 타임아웃 (초) - 이 시간 동안 완성되지 않은 프레임은 버림
+    frame_timeout_sec: 1.0
+
+    # 카메라 개수
+    num_cameras: 5
+
+    # 카메라 0 설정
+    camera_0:
+      name: "front_camera"
+      ip: "192.168.0.37"
+      port: 1235
+      topic_name: "/camera/front/image_raw"
+      width: 320
+      height: 240
+      channels: 3 # MORAI JPEG는 디코딩 후 3채널(BGR)
+
+    # 카메라 1 설정
+    camera_1:
+      name: "front_left_camera"
+      ip: "192.168.0.37"
+      port: 1237
+      topic_name: "/camera/front_left/image_raw"
+      width: 320
+      height: 240
+      channels: 3
+
+    # 카메라 2 설정
+    camera_2:
+      name: "rear_left_camera"
+      ip: "192.168.0.37"
+      port: 1239
+      topic_name: "/camera/rear_left/image_raw"
+      width: 320
+      height: 240
+      channels: 3
+
+    # 카메라 3 설정
+    camera_3:
+       name: "rear_right_camera"
+       ip: "192.168.0.37"
+       port: 1241
+       topic_name: "/camera/rear_right/image_raw"
+       width: 320
+       height: 240
+       channels: 3
+       
+    camera_4:
+       name: "front_right_camera"
+       ip: "192.168.0.37"
+       port: 1243
+       topic_name: "/camera/front_right/image_raw"
+       width: 320
+       height: 240
+       channels: 3
