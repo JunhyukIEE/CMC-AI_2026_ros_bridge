@@ -8,7 +8,9 @@ endif()
 # find dependencies
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(rclpy REQUIRED)
 find_package(morai_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(tf2 REQUIRED)
@@ -45,6 +47,12 @@ install(TARGETS
   morai_receiver_node
   morai_sender_node
   DESTINATION lib/${PROJECT_NAME})
+
+install(PROGRAMS
+  scripts/morai_sensor_receiver_node.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME morai_sensor_receiver_node
+)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)

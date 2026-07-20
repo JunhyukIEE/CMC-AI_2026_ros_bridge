@@ -17,13 +17,13 @@
     frame_timeout_sec: 1.0
 
     # 카메라 개수
-    num_cameras: 5
+    num_cameras: 4
 
     # 카메라 0 설정
     camera_0:
       name: "front_camera"
       ip: "192.168.0.37"
-      port: 1235
+      port: 9001
       topic_name: "/camera/front/image_raw"
       width: 320
       height: 240
@@ -33,7 +33,7 @@
     camera_1:
       name: "front_left_camera"
       ip: "192.168.0.37"
-      port: 1237
+      port: 9002
       topic_name: "/camera/front_left/image_raw"
       width: 320
       height: 240
@@ -43,7 +43,7 @@
     camera_2:
       name: "rear_left_camera"
       ip: "192.168.0.37"
-      port: 1239
+      port: 9003
       topic_name: "/camera/rear_left/image_raw"
       width: 320
       height: 240
@@ -53,17 +53,8 @@
     camera_3:
        name: "rear_right_camera"
        ip: "192.168.0.37"
-       port: 1241
+       port: 9004
        topic_name: "/camera/rear_right/image_raw"
-       width: 320
-       height: 240
-       channels: 3
-       
-    camera_4:
-       name: "front_right_camera"
-       ip: "192.168.0.37"
-       port: 1243
-       topic_name: "/camera/front_right/image_raw"
        width: 320
        height: 240
        channels: 3

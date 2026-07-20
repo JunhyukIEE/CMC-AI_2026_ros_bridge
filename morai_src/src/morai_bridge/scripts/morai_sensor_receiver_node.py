@@ -1,0 +1,218 @@
+#!/usr/bin/python3
+
+import math
+import socket
+import struct
+
+import rclpy
+from morai_msgs.msg import CollisionData, ObjectStatus
+from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
+from sensor_msgs.msg import Imu, LaserScan, NavSatFix, NavSatStatus
+
+
+COLLISION = struct.Struct("<15si3iii" + "hh6f" * 5 + "2s")
+IMU = struct.Struct("<9si3iii10d2s")
+LIDAR_HEADER = struct.Struct("<9si3f")
+LIDAR_POINT = struct.Struct("<Hb")
+
+assert COLLISION.size == 181
+assert IMU.size == 115
+assert LIDAR_HEADER.size + LIDAR_POINT.size * 360 + 2 == 1107
+
+
+def nmea_coordinate(value, direction):
+    raw = float(value)
+    result = int(raw / 100) + (raw % 100) / 60
+    return -result if direction in ("S", "W") else result
+
+
+class MoraiSensorReceiver(Node):
+    def __init__(self):
+        super().__init__("morai_sensor_receiver_node")
+
+        self.declare_parameter("bind_ip", "192.168.0.37")
+        self.declare_parameter("collision_port", 9011)
+        self.declare_parameter("lidar_port", 9005)
+        self.declare_parameter("gnss_port", 9006)
+        self.declare_parameter("imu_port", 9007)
+        self.declare_parameter("map_frame", "map")
+        self.declare_parameter("lidar_frame", "lidar")
+        self.declare_parameter("imu_frame", "imu")
+
+        bind_ip = self.get_parameter("bind_ip").value
+        self.map_frame = self.get_parameter("map_frame").value
+        self.lidar_frame = self.get_parameter("lidar_frame").value
+        self.imu_frame = self.get_parameter("imu_frame").value
+        ports = {
+            "collision": self.get_parameter("collision_port").value,
+            "lidar": self.get_parameter("lidar_port").value,
+            "gnss": self.get_parameter("gnss_port").value,
+            "imu": self.get_parameter("imu_port").value,
+        }
+
+        self.sockets = {
+            name: self._open_socket(bind_ip, port) for name, port in ports.items()
+        }
+        self.handlers = {
+            "collision": self._publish_collision,
+            "lidar": self._publish_lidar,
+            "gnss": self._publish_gnss,
+            "imu": self._publish_imu,
+        }
+
+        self.collision_pub = self.create_publisher(CollisionData, "/CollisionData", 10)
+        self.lidar_pub = self.create_publisher(
+            LaserScan, "/scan", qos_profile_sensor_data
+        )
+        self.gnss_pub = self.create_publisher(
+            NavSatFix, "/gps/fix", qos_profile_sensor_data
+        )
+        self.imu_pub = self.create_publisher(
+            Imu, "/imu/data", qos_profile_sensor_data
+        )
+        self.last_altitude = 0.0
+        self.timer = self.create_timer(0.01, self._poll)
+
+        self.get_logger().info(
+            "Listening on %s: collision=%d lidar=%d gnss=%d imu=%d"
+            % (bind_ip, ports["collision"], ports["lidar"], ports["gnss"], ports["imu"])
+        )
+
+    def destroy_node(self):
+        for sock in self.sockets.values():
+            sock.close()
+        super().destroy_node()
+
+    @staticmethod
+    def _open_socket(ip, port):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 2**20)
+        sock.bind((ip, port))
+        sock.setblocking(False)
+        return sock
+
+    def _poll(self):
+        for name, sock in self.sockets.items():
+            for _ in range(32):
+                try:
+                    data, _ = sock.recvfrom(65535)
+                except BlockingIOError:
+                    break
+                try:
+                    self.handlers[name](data)
+                except (UnicodeError, ValueError, IndexError, struct.error) as error:
+                    self.get_logger().warning(
+                        f"Invalid {name} packet: {error}", throttle_duration_sec=5.0
+                    )
+
+    def _publish_collision(self, data):
+        if len(data) != COLLISION.size:
+            raise ValueError(f"expected {COLLISION.size} bytes, got {len(data)}")
+        values = COLLISION.unpack(data)
+        if not values[0].startswith(b"#") or values[-1] != b"\r\n":
+            raise ValueError("bad header or tail")
+
+        msg = CollisionData()
+        msg.header.stamp.sec = values[5]
+        msg.header.stamp.nanosec = values[6]
+        msg.header.frame_id = self.map_frame
+
+        objects = [values[7 + i * 8 : 15 + i * 8] for i in range(5)]
+        count = min(max(values[2], 0), 5)
+        if count == 0:
+            count = sum(any(value != 0 for value in item) for item in objects)
+
+        if count:
+            msg.global_offset_x, msg.global_offset_y, msg.global_offset_z = objects[0][5:8]
+        for obj_type, obj_id, x, y, z, _, _, _ in objects[:count]:
+            obj = ObjectStatus()
+            obj.type = obj_type
+            obj.unique_id = obj_id
+            obj.position.x = x
+            obj.position.y = y
+            obj.position.z = z
+            msg.collision_object.append(obj)
+        self.collision_pub.publish(msg)
+
+    def _publish_lidar(self, data):
+        if len(data) != 1107:
+            raise ValueError(f"expected 1107 bytes, got {len(data)}")
+
+        msg = LaserScan()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = self.lidar_frame
+        msg.angle_min = math.pi / 2
+        msg.angle_increment = 2 * math.pi / 360
+        msg.angle_max = msg.angle_min + msg.angle_increment * 359
+        msg.range_min = 0.0
+        msg.range_max = 10.0
+
+        offset = LIDAR_HEADER.size
+        for index in range(360):
+            distance_mm, intensity = LIDAR_POINT.unpack_from(
+                data, offset + index * LIDAR_POINT.size
+            )
+            distance = distance_mm / 1000.0
+            msg.ranges.append(distance if 0.0 < distance < msg.range_max else math.inf)
+            msg.intensities.append(float(intensity))
+        self.lidar_pub.publish(msg)
+
+    def _publish_gnss(self, data):
+        text = data.rstrip(b"\x00").decode("ascii", errors="strict").strip()
+        for sentence in text.splitlines():
+            fields = sentence.split(",")
+            if fields[0] == "$GPGGA" and len(fields) > 10:
+                latitude = nmea_coordinate(fields[2], fields[3])
+                longitude = nmea_coordinate(fields[4], fields[5])
+                self.last_altitude = float(fields[9])
+                has_fix = fields[6] not in ("", "0")
+            elif fields[0] == "$GPRMC" and len(fields) > 6:
+                latitude = nmea_coordinate(fields[3], fields[4])
+                longitude = nmea_coordinate(fields[5], fields[6])
+                has_fix = fields[2] == "A"
+            else:
+                continue
+
+            msg = NavSatFix()
+            msg.header.stamp = self.get_clock().now().to_msg()
+            msg.header.frame_id = self.map_frame
+            msg.status.status = (
+                NavSatStatus.STATUS_FIX if has_fix else NavSatStatus.STATUS_NO_FIX
+            )
+            msg.status.service = NavSatStatus.SERVICE_GPS
+            msg.latitude = latitude
+            msg.longitude = longitude
+            msg.altitude = self.last_altitude
+            self.gnss_pub.publish(msg)
+
+    def _publish_imu(self, data):
+        if len(data) != IMU.size:
+            raise ValueError(f"expected {IMU.size} bytes, got {len(data)}")
+        values = IMU.unpack(data)
+        if not values[0].startswith(b"#") or values[-1] != b"\r\n":
+            raise ValueError("bad header or tail")
+
+        msg = Imu()
+        msg.header.stamp.sec = values[5]
+        msg.header.stamp.nanosec = values[6]
+        msg.header.frame_id = self.imu_frame
+        msg.orientation.w, msg.orientation.x, msg.orientation.y, msg.orientation.z = values[7:11]
+        msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z = values[11:14]
+        msg.linear_acceleration.x, msg.linear_acceleration.y, msg.linear_acceleration.z = values[14:17]
+        self.imu_pub.publish(msg)
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = MoraiSensorReceiver()
+    try:
+        rclpy.spin(node)
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == "__main__":
+    main()

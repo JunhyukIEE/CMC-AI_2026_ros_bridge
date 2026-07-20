@@ -70,7 +70,7 @@ public:
     MoraiReceiverNode() : Node("morai_receiver_node")
     {
         // 파라미터 선언 (UDP 포트, odom 프레임 ID)
-        this->declare_parameter<int>("udp_port", 1578);
+        this->declare_parameter<int>("udp_port", 9000);
         this->declare_parameter<std::string>("frame_id", "map");
 
 

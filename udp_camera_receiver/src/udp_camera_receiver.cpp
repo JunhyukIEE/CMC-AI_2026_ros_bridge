@@ -106,7 +106,7 @@ void UdpCameraReceiver::loadParameters()
 
         this->declare_parameter<std::string>(prefix + "name", "camera_" + std::to_string(i));
         this->declare_parameter<std::string>(prefix + "ip", "192.168.0.37");
-        this->declare_parameter<int>(prefix + "port", 9090 + i);
+        this->declare_parameter<int>(prefix + "port", 9001 + i);
         this->declare_parameter<std::string>(prefix + "topic_name", "/camera_" + std::to_string(i) + "/image_raw");
         this->declare_parameter<int>(prefix + "width", 640);
         this->declare_parameter<int>(prefix + "height", 480);

@@ -66,7 +66,7 @@ ros2 launch udp_camera_receiver udp_camera_receiver.launch.py
     camera_0:
       name: "front_camera"
       ip: "192.168.0.37"
-      port: 9090
+      port: 9001
       topic_name: "/camera/front/image_raw"
       width: 640
       height: 480
@@ -76,7 +76,7 @@ ros2 launch udp_camera_receiver udp_camera_receiver.launch.py
     camera_1:
       name: "rear_camera"
       ip: "192.168.0.37"
-      port: 9091
+      port: 9002
       topic_name: "/camera/rear/image_raw"
       width: 640
       height: 480

@@ -44,7 +44,7 @@ public:
     {
         // ROS 파라미터 선언
         this->declare_parameter<std::string>("simulator_ip", "192.168.0.27");
-        this->declare_parameter<int>("cmd_udp_port", 9095);
+        this->declare_parameter<int>("cmd_udp_port", 9091);
 
         // 파라미터 값 가져오기
         simulator_ip_ = this->get_parameter("simulator_ip").as_string();

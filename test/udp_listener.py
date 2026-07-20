@@ -6,7 +6,7 @@ def main():
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
     # 바인딩할 주소와 포트
-    udp_address = ('192.168.0.37', 1578)
+    udp_address = ('192.168.0.37', 9000)
     print(f"{udp_address} 에서 UDP 메시지를 기다리는 중...")
 
     try:
@@ -26,7 +26,7 @@ def main():
 
     except OSError as e:
         print(f"오류: {e}")
-        print("포트 1578이 이미 사용 중일 수 있습니다.")
+        print("포트 9000이 이미 사용 중일 수 있습니다.")
     except KeyboardInterrupt:
         print("\n프로그램을 종료합니다.")
     finally:

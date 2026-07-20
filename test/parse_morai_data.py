@@ -51,7 +51,7 @@ def parse_ego_vehicle_status(data):
 
 def main():
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    udp_address = ('192.168.0.37', 1578)
+    udp_address = ('192.168.0.37', 9000)
     print(f"{udp_address} 에서 MORAI 데이터 수신 대기 중...")
 
     try:
