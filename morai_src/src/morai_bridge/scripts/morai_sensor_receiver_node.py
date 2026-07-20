@@ -71,6 +71,7 @@ class MoraiSensorReceiver(Node):
         self.imu_pub = self.create_publisher(
             Imu, "/imu/data", qos_profile_sensor_data
         )
+        self.imu_time_offset_ns = None
         self.last_altitude = 0.0
         self.timer = self.create_timer(0.01, self._poll)
 
@@ -194,7 +195,20 @@ class MoraiSensorReceiver(Node):
             raise ValueError("bad header or tail")
 
         msg = Imu()
-        msg.header.stamp = self.get_clock().now().to_msg()
+        packet_stamp_ns = values[5] * 1_000_000_000 + values[6]
+        now_ns = self.get_clock().now().nanoseconds
+        if (
+            self.imu_time_offset_ns is None
+            or abs(packet_stamp_ns + self.imu_time_offset_ns - now_ns) > 1_000_000_000
+        ):
+            self.imu_time_offset_ns = now_ns - packet_stamp_ns
+            self.get_logger().info(
+                f"IMU timestamp offset: {self.imu_time_offset_ns / 1e9:.6f} s"
+            )
+        stamp_ns = packet_stamp_ns + self.imu_time_offset_ns
+        msg.header.stamp.sec, msg.header.stamp.nanosec = divmod(
+            stamp_ns, 1_000_000_000
+        )
         msg.header.frame_id = self.imu_frame
         msg.orientation.w, msg.orientation.x, msg.orientation.y, msg.orientation.z = values[7:11]
         msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z = values[11:14]
