@@ -54,6 +54,12 @@ install(PROGRAMS
   RENAME morai_sensor_receiver_node
 )
 
+install(PROGRAMS
+  scripts/navsat_to_gnss_node.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME navsat_to_gnss_node
+)
+
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
   # the following line skips the linter which checks for copyrights

@@ -33,7 +33,7 @@ class MoraiSensorReceiver(Node):
 
         self.declare_parameter("bind_ip", "192.168.0.37")
         self.declare_parameter("collision_port", 9011)
-        self.declare_parameter("lidar_port", 9005)
+        self.declare_parameter("lidar_port", 19005)
         self.declare_parameter("gnss_port", 9006)
         self.declare_parameter("imu_port", 9007)
         self.declare_parameter("map_frame", "map")
@@ -72,6 +72,7 @@ class MoraiSensorReceiver(Node):
             Imu, "/imu/data", qos_profile_sensor_data
         )
         self.imu_time_offset_ns = None
+        self.last_imu_packet_stamp_ns = None
         self.last_altitude = 0.0
         self.timer = self.create_timer(0.01, self._poll)
 
@@ -196,6 +197,9 @@ class MoraiSensorReceiver(Node):
 
         msg = Imu()
         packet_stamp_ns = values[5] * 1_000_000_000 + values[6]
+        if packet_stamp_ns == self.last_imu_packet_stamp_ns:
+            return
+        self.last_imu_packet_stamp_ns = packet_stamp_ns
         now_ns = self.get_clock().now().nanoseconds
         if (
             self.imu_time_offset_ns is None
