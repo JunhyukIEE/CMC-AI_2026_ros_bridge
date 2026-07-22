@@ -4,24 +4,20 @@ import math
 
 import rclpy
 from geometry_msgs.msg import PoseWithCovarianceStamped
+from pyproj import Transformer
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import NavSatFix, NavSatStatus
 
 
-EARTH_RADIUS_M = 6378137.0
+def utm_epsg(latitude, longitude, zone=0):
+    zone = zone or int((longitude + 180.0) // 6.0) + 1
+    if not 1 <= zone <= 60:
+        raise ValueError(f"invalid UTM zone: {zone}")
+    return (32600 if latitude >= 0.0 else 32700) + zone
 
 
-def local_xy(latitude, longitude, origin_latitude, origin_longitude):
-    origin_latitude_rad = math.radians(origin_latitude)
-    x = EARTH_RADIUS_M * math.cos(origin_latitude_rad) * math.radians(
-        longitude - origin_longitude
-    )
-    y = EARTH_RADIUS_M * math.radians(latitude - origin_latitude)
-    return x, y
-
-
-assert local_xy(35.0, 126.0, 35.0, 126.0) == (0.0, 0.0)
+assert utm_epsg(37.238745, 126.77282) == 32652
 
 
 class NavSatToGnss(Node):
@@ -31,16 +27,10 @@ class NavSatToGnss(Node):
         self.declare_parameter("input_topic", "/gps/fix")
         self.declare_parameter("output_topic", "/gnss")
         self.declare_parameter("frame_id", "map")
-        self.declare_parameter("origin_latitude", 0.0)
-        self.declare_parameter("origin_longitude", 0.0)
+        self.declare_parameter("utm_zone", 0)
 
-        origin_latitude = self.get_parameter("origin_latitude").value
-        origin_longitude = self.get_parameter("origin_longitude").value
-        self.origin = (
-            None
-            if origin_latitude == 0.0 and origin_longitude == 0.0
-            else (origin_latitude, origin_longitude)
-        )
+        self.utm_zone = self.get_parameter("utm_zone").value
+        self.transformer = None
         self.frame_id = self.get_parameter("frame_id").value
 
         self.publisher = self.create_publisher(
@@ -61,13 +51,14 @@ class NavSatToGnss(Node):
         if not math.isfinite(fix.latitude) or not math.isfinite(fix.longitude):
             return
 
-        if self.origin is None:
-            self.origin = (fix.latitude, fix.longitude)
+        if self.transformer is None:
+            epsg = utm_epsg(fix.latitude, fix.longitude, self.utm_zone)
+            self.transformer = Transformer.from_crs(4326, epsg, always_xy=True)
             self.get_logger().info(
-                f"GNSS ENU origin: lat={fix.latitude:.9f}, lon={fix.longitude:.9f}"
+                f"GNSS UTM projection: EPSG:{epsg}"
             )
 
-        x, y = local_xy(fix.latitude, fix.longitude, *self.origin)
+        x, y = self.transformer.transform(fix.longitude, fix.latitude)
         pose = PoseWithCovarianceStamped()
         pose.header.stamp = fix.header.stamp
         pose.header.frame_id = self.frame_id

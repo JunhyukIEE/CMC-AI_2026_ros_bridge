@@ -74,7 +74,7 @@ class MoraiSensorReceiver(Node):
         self.imu_time_offset_ns = None
         self.last_imu_packet_stamp_ns = None
         self.last_altitude = 0.0
-        self.timer = self.create_timer(0.01, self._poll)
+        self.timer = self.create_timer(0.001, self._poll)
 
         self.get_logger().info(
             "Listening on %s: collision=%d lidar=%d gnss=%d imu=%d"
