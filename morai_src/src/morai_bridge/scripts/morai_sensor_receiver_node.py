@@ -3,6 +3,7 @@
 import math
 import socket
 import struct
+import time
 
 import rclpy
 from morai_msgs.msg import CollisionData, ObjectStatus
@@ -73,8 +74,12 @@ class MoraiSensorReceiver(Node):
         )
         self.imu_time_offset_ns = None
         self.last_imu_packet_stamp_ns = None
+        self.imu_rate_started = time.monotonic()
+        self.imu_raw_count = 0
+        self.imu_publish_count = 0
         self.last_altitude = 0.0
         self.timer = self.create_timer(0.001, self._poll)
+        self.imu_rate_timer = self.create_timer(10.0, self._report_imu_rate)
 
         self.get_logger().info(
             "Listening on %s: collision=%d lidar=%d gnss=%d imu=%d"
@@ -195,10 +200,15 @@ class MoraiSensorReceiver(Node):
         if not values[0].startswith(b"#") or values[-1] != b"\r\n":
             raise ValueError("bad header or tail")
 
+        self.imu_raw_count += 1
         msg = Imu()
         packet_stamp_ns = values[5] * 1_000_000_000 + values[6]
         if packet_stamp_ns == self.last_imu_packet_stamp_ns:
             return
+        if self.last_imu_packet_stamp_ns is not None:
+            gap = (packet_stamp_ns - self.last_imu_packet_stamp_ns) / 1e9
+            if gap > 0.05:
+                self.get_logger().warning(f"Raw IMU UDP gap: {gap:.3f} s")
         self.last_imu_packet_stamp_ns = packet_stamp_ns
         now_ns = self.get_clock().now().nanoseconds
         if (
@@ -218,6 +228,17 @@ class MoraiSensorReceiver(Node):
         msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z = values[11:14]
         msg.linear_acceleration.x, msg.linear_acceleration.y, msg.linear_acceleration.z = values[14:17]
         self.imu_pub.publish(msg)
+        self.imu_publish_count += 1
+
+    def _report_imu_rate(self):
+        elapsed = time.monotonic() - self.imu_rate_started
+        self.get_logger().info(
+            f"IMU rates: raw_udp={self.imu_raw_count / elapsed:.2f} Hz, "
+            f"published={self.imu_publish_count / elapsed:.2f} Hz"
+        )
+        self.imu_rate_started = time.monotonic()
+        self.imu_raw_count = 0
+        self.imu_publish_count = 0
 
 
 def main(args=None):
