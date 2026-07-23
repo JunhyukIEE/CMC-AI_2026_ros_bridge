@@ -1,5 +1,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include "morai_msgs/msg/ego_vehicle_status.hpp"
+#include "autoware_vehicle_msgs/msg/steering_report.hpp"
+#include "autoware_vehicle_msgs/msg/velocity_report.hpp"
 #include "tf2/LinearMath/Quaternion.h"
 #include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
 
@@ -81,6 +83,12 @@ public:
         
         // EgoVehicleStatus 정보를 발행할 퍼블리셔 생성
         ego_topic_pub_ = this->create_publisher<morai_msgs::msg::EgoVehicleStatus>("/Ego_topic", 10);
+        velocity_status_pub_ =
+            this->create_publisher<autoware_vehicle_msgs::msg::VelocityReport>(
+                "/vehicle/status/velocity_status", 10);
+        steering_status_pub_ =
+            this->create_publisher<autoware_vehicle_msgs::msg::SteeringReport>(
+                "/vehicle/status/steering_status", 10);
 
         RCLCPP_INFO(this->get_logger(), "MoraiBridgeNode has been started.");
         RCLCPP_INFO(this->get_logger(), "Listening for UDP packets on port: %d", udp_port_);
@@ -186,12 +194,28 @@ private:
         ego_msg->brake = status->brake;
         ego_msg->wheel_angle = status->steer;
 
+        auto velocity_status = autoware_vehicle_msgs::msg::VelocityReport();
+        velocity_status.header.stamp = ego_msg->header.stamp;
+        velocity_status.header.frame_id = "base_link";
+        velocity_status.longitudinal_velocity = ego_msg->velocity.x;
+        velocity_status.lateral_velocity = ego_msg->velocity.y;
+        velocity_status.heading_rate = status->angular_velocity_z * M_PI / 180.0;
+        velocity_status_pub_->publish(velocity_status);
+
+        auto steering_status = autoware_vehicle_msgs::msg::SteeringReport();
+        steering_status.stamp = ego_msg->header.stamp;
+        steering_status.steering_tire_angle = status->steer * M_PI / 180.0;
+        steering_status_pub_->publish(steering_status);
 
         ego_topic_pub_->publish(std::move(ego_msg));
     }
 
     // ROS 관련 멤버
     rclcpp::Publisher<morai_msgs::msg::EgoVehicleStatus>::SharedPtr ego_topic_pub_;
+    rclcpp::Publisher<autoware_vehicle_msgs::msg::VelocityReport>::SharedPtr
+        velocity_status_pub_;
+    rclcpp::Publisher<autoware_vehicle_msgs::msg::SteeringReport>::SharedPtr
+        steering_status_pub_;
 
     // UDP 관련 멤버
     std::thread udp_thread_;
