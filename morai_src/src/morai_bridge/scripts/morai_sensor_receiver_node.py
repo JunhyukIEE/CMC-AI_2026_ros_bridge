@@ -39,11 +39,13 @@ class MoraiSensorReceiver(Node):
         self.declare_parameter("imu_port", 9007)
         self.declare_parameter("map_frame", "map")
         self.declare_parameter("lidar_frame", "lidar")
+        self.declare_parameter("gnss_frame", "base_link")
         self.declare_parameter("imu_frame", "imu")
 
         bind_ip = self.get_parameter("bind_ip").value
         self.map_frame = self.get_parameter("map_frame").value
         self.lidar_frame = self.get_parameter("lidar_frame").value
+        self.gnss_frame = self.get_parameter("gnss_frame").value
         self.imu_frame = self.get_parameter("imu_frame").value
         ports = {
             "collision": self.get_parameter("collision_port").value,
@@ -66,12 +68,8 @@ class MoraiSensorReceiver(Node):
         self.lidar_pub = self.create_publisher(
             LaserScan, "/scan", qos_profile_sensor_data
         )
-        self.gnss_pub = self.create_publisher(
-            NavSatFix, "/gps/fix", qos_profile_sensor_data
-        )
-        self.imu_pub = self.create_publisher(
-            Imu, "/imu/data", qos_profile_sensor_data
-        )
+        self.gnss_pub = self.create_publisher(NavSatFix, "/gps/fix", 10)
+        self.imu_pub = self.create_publisher(Imu, "/imu/data", 10)
         self.imu_time_offset_ns = None
         self.last_imu_packet_stamp_ns = None
         self.imu_rate_started = time.monotonic()
@@ -183,7 +181,7 @@ class MoraiSensorReceiver(Node):
 
             msg = NavSatFix()
             msg.header.stamp = self.get_clock().now().to_msg()
-            msg.header.frame_id = self.map_frame
+            msg.header.frame_id = self.gnss_frame
             msg.status.status = (
                 NavSatStatus.STATUS_FIX if has_fix else NavSatStatus.STATUS_NO_FIX
             )
