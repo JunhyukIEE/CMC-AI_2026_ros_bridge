@@ -52,7 +52,7 @@ public:
 
         // 제어 명령을 받는 서브스크라이버 생성
         subscription_ = this->create_subscription<morai_msgs::msg::CtrlCmd>(
-            "/CtrlCmd", 10, std::bind(&MoraiSenderNode::ctrl_cmd_callback, this, _1));
+            "/control/command/ctrl_cmd", 10, std::bind(&MoraiSenderNode::ctrl_cmd_callback, this, _1));
 
         // UDP 소켓 초기화
         init_udp_socket();
