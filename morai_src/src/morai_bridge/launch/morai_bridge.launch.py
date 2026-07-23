@@ -9,11 +9,13 @@ def generate_launch_description():
                 package="morai_bridge",
                 executable="morai_sensor_receiver_node",
                 output="screen",
+                remappings=[("/gps/fix", "/sensing/gnss/ublox/nav_sat_fix")],
             ),
             Node(
                 package="morai_bridge",
                 executable="navsat_to_gnss_node",
                 output="screen",
+                remappings=[("/gps/fix", "/sensing/gnss/ublox/nav_sat_fix")],
             ),
         ]
     )
