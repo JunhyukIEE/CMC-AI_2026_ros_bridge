@@ -1,8 +1,0 @@
-pure_pursuit_node:
-  ros__parameters:
-    waypoint_path: "/home/ljh/workspace/CMC-AI_2026/src/ad_src/src/waypoint_recorder/waypoints.csv"
-    lookahead_distance: 4.0
-    kp: 0.95
-    ki: 0.1
-    kd: 0.08
-    loop_rate_hz: 20.0
