@@ -1,4 +1,5 @@
 #include "rclcpp/rclcpp.hpp"
+#include "autoware_vehicle_msgs/msg/gear_command.hpp"
 #include "morai_msgs/msg/ctrl_cmd.hpp"
 
 #include <iostream>
@@ -10,6 +11,22 @@
 #include <unistd.h>
 
 using namespace std::placeholders;
+
+constexpr int to_morai_gear(uint8_t gear)
+{
+    using Gear = autoware_vehicle_msgs::msg::GearCommand;
+    if (gear >= Gear::DRIVE && gear <= Gear::DRIVE_18) return 4;
+    if (gear == Gear::REVERSE || gear == Gear::REVERSE_2) return 2;
+    if (gear == Gear::LOW || gear == Gear::LOW_2) return 5;
+    if (gear == Gear::PARK) return 1;
+    if (gear == Gear::NEUTRAL) return 3;
+    if (gear == Gear::NONE) return 0;
+    return -1;
+}
+
+static_assert(to_morai_gear(autoware_vehicle_msgs::msg::GearCommand::PARK) == 1);
+static_assert(to_morai_gear(autoware_vehicle_msgs::msg::GearCommand::REVERSE) == 2);
+static_assert(to_morai_gear(autoware_vehicle_msgs::msg::GearCommand::DRIVE) == 4);
 
 // MORAI CtrlCmd UDP 패킷 구조체
 #pragma pack(push, 1)
@@ -53,6 +70,10 @@ public:
         // 제어 명령을 받는 서브스크라이버 생성
         subscription_ = this->create_subscription<morai_msgs::msg::CtrlCmd>(
             "/control/command/ctrl_cmd", 10, std::bind(&MoraiSenderNode::ctrl_cmd_callback, this, _1));
+        gear_subscription_ =
+            this->create_subscription<autoware_vehicle_msgs::msg::GearCommand>(
+                "/control/command/gear_cmd", 10,
+                std::bind(&MoraiSenderNode::gear_cmd_callback, this, _1));
 
         // UDP 소켓 초기화
         init_udp_socket();
@@ -69,6 +90,19 @@ public:
     }
 
 private:
+    void gear_cmd_callback(
+        const autoware_vehicle_msgs::msg::GearCommand::SharedPtr msg)
+    {
+        const int gear = to_morai_gear(msg->command);
+        if (gear < 0) {
+            RCLCPP_WARN(
+                this->get_logger(), "Unsupported gear command: %u",
+                static_cast<unsigned>(msg->command));
+            return;
+        }
+        current_gear_ = static_cast<uint8_t>(gear);
+    }
+
     void init_udp_socket()
     {
         send_sockfd_ = socket(AF_INET, SOCK_DGRAM, 0);
@@ -107,7 +141,7 @@ private:
         // 2. 메시지 본문 채우기
         CtrlCommandPacket cmd_packet;
         cmd_packet.mode = 2;       // 2: AutoMode
-        cmd_packet.gear = 4;       // 4: Drive
+        cmd_packet.gear = current_gear_;
         cmd_packet.cmd_type = 1;   // 1: Throttle
         cmd_packet.velocity = 0.0f;
         cmd_packet.acceleration = 0.0f;
@@ -135,12 +169,15 @@ private:
 
     // ROS 관련 멤버
     rclcpp::Subscription<morai_msgs::msg::CtrlCmd>::SharedPtr subscription_;
+    rclcpp::Subscription<autoware_vehicle_msgs::msg::GearCommand>::SharedPtr
+        gear_subscription_;
 
     // UDP 관련 멤버
     int send_sockfd_ = -1;
     struct sockaddr_in simulator_addr_;
     std::string simulator_ip_;
     int cmd_udp_port_;
+    uint8_t current_gear_ = 4;
 };
 
 int main(int argc, char * argv[])

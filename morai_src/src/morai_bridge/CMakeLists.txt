@@ -43,6 +43,7 @@ ament_target_dependencies(
   morai_sender_node
   "rclcpp"
   "morai_msgs"
+  "autoware_vehicle_msgs"
 )
 
 install(TARGETS 

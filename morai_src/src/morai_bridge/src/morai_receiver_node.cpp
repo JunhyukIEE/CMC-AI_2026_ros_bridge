@@ -1,5 +1,6 @@
 #include "rclcpp/rclcpp.hpp"
 #include "morai_msgs/msg/ego_vehicle_status.hpp"
+#include "autoware_vehicle_msgs/msg/gear_report.hpp"
 #include "autoware_vehicle_msgs/msg/steering_report.hpp"
 #include "autoware_vehicle_msgs/msg/velocity_report.hpp"
 #include "tf2/LinearMath/Quaternion.h"
@@ -14,6 +15,22 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <cmath>
+
+constexpr uint8_t to_autoware_gear(int8_t gear)
+{
+    using Gear = autoware_vehicle_msgs::msg::GearReport;
+    switch (gear) {
+        case 1: return Gear::PARK;
+        case 2: return Gear::REVERSE;
+        case 3: return Gear::NEUTRAL;
+        case 4: return Gear::DRIVE;
+        case 5: return Gear::LOW;
+        default: return Gear::NONE;
+    }
+}
+
+static_assert(to_autoware_gear(1) == autoware_vehicle_msgs::msg::GearReport::PARK);
+static_assert(to_autoware_gear(4) == autoware_vehicle_msgs::msg::GearReport::DRIVE);
 
 // MORAI EgoVehicleStatus UDP 패킷 구조체
 // #pragma pack(push, 1)을 사용하여 C++ 컴파일러가 멤버 사이에 패딩 바이트를 추가하는 것을 방지합니다.
@@ -89,6 +106,9 @@ public:
         steering_status_pub_ =
             this->create_publisher<autoware_vehicle_msgs::msg::SteeringReport>(
                 "/vehicle/status/steering_status", 10);
+        gear_status_pub_ =
+            this->create_publisher<autoware_vehicle_msgs::msg::GearReport>(
+                "/vehicle/status/gear_status", 10);
 
         RCLCPP_INFO(this->get_logger(), "MoraiBridgeNode has been started.");
         RCLCPP_INFO(this->get_logger(), "Listening for UDP packets on port: %d", udp_port_);
@@ -207,6 +227,11 @@ private:
         steering_status.steering_tire_angle = status->steer * M_PI / 180.0;
         steering_status_pub_->publish(steering_status);
 
+        auto gear_status = autoware_vehicle_msgs::msg::GearReport();
+        gear_status.stamp = ego_msg->header.stamp;
+        gear_status.report = to_autoware_gear(status->gear);
+        gear_status_pub_->publish(gear_status);
+
         ego_topic_pub_->publish(std::move(ego_msg));
     }
 
@@ -216,6 +241,8 @@ private:
         velocity_status_pub_;
     rclcpp::Publisher<autoware_vehicle_msgs::msg::SteeringReport>::SharedPtr
         steering_status_pub_;
+    rclcpp::Publisher<autoware_vehicle_msgs::msg::GearReport>::SharedPtr
+        gear_status_pub_;
 
     // UDP 관련 멤버
     std::thread udp_thread_;
