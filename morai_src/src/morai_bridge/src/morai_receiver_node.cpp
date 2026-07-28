@@ -1,5 +1,5 @@
 #include "rclcpp/rclcpp.hpp"
-#include "morai_msgs/msg/ego_vehicle_status.hpp"
+#include "autoware_vehicle_msgs/msg/control_mode_report.hpp"
 #include "autoware_vehicle_msgs/msg/gear_report.hpp"
 #include "autoware_vehicle_msgs/msg/steering_report.hpp"
 #include "autoware_vehicle_msgs/msg/velocity_report.hpp"
@@ -31,6 +31,7 @@ constexpr uint8_t to_autoware_gear(int8_t gear)
 
 static_assert(to_autoware_gear(1) == autoware_vehicle_msgs::msg::GearReport::PARK);
 static_assert(to_autoware_gear(4) == autoware_vehicle_msgs::msg::GearReport::DRIVE);
+static_assert(autoware_vehicle_msgs::msg::ControlModeReport::AUTONOMOUS == 1);
 
 // MORAI EgoVehicleStatus UDP 패킷 구조체
 // #pragma pack(push, 1)을 사용하여 C++ 컴파일러가 멤버 사이에 패딩 바이트를 추가하는 것을 방지합니다.
@@ -88,18 +89,15 @@ class MoraiReceiverNode : public rclcpp::Node
 public:
     MoraiReceiverNode() : Node("morai_receiver_node")
     {
-        // 파라미터 선언 (UDP 포트, odom 프레임 ID)
+        // 파라미터 선언
         this->declare_parameter<int>("udp_port", 9000);
-        this->declare_parameter<std::string>("frame_id", "map");
 
 
         // 파라미터 값 가져오기
         udp_port_ = this->get_parameter("udp_port").as_int();
-        frame_id_ = this->get_parameter("frame_id").as_string();
 
         
-        // EgoVehicleStatus 정보를 발행할 퍼블리셔 생성
-        ego_topic_pub_ = this->create_publisher<morai_msgs::msg::EgoVehicleStatus>("/Ego_topic", 10);
+        // Autoware 차량 상태 퍼블리셔 생성
         velocity_status_pub_ =
             this->create_publisher<autoware_vehicle_msgs::msg::VelocityReport>(
                 "/vehicle/status/velocity_status", 10);
@@ -109,6 +107,9 @@ public:
         gear_status_pub_ =
             this->create_publisher<autoware_vehicle_msgs::msg::GearReport>(
                 "/vehicle/status/gear_status", 10);
+        control_mode_pub_ =
+            this->create_publisher<autoware_vehicle_msgs::msg::ControlModeReport>(
+                "/vehicle/status/control_mode", 10);
 
         RCLCPP_INFO(this->get_logger(), "MoraiBridgeNode has been started.");
         RCLCPP_INFO(this->get_logger(), "Listening for UDP packets on port: %d", udp_port_);
@@ -178,76 +179,53 @@ private:
                 continue;
             }
             
-            // 파싱된 데이터를 EgoVehicleStatus 메시지로 변환하고 발행
-            publish_ego_vehicle_status(status);
+            publish_vehicle_status(status);
         }
 
         close(sockfd);
     }
 
-    void publish_ego_vehicle_status(const EgoVehicleStatusUDP* status)
+    void publish_vehicle_status(const EgoVehicleStatusUDP* status)
     {
-        auto ego_msg = std::make_unique<morai_msgs::msg::EgoVehicleStatus>();
-
-        // 1. Header 설정
-        ego_msg->header.stamp = this->now();
-        ego_msg->header.frame_id = frame_id_;
-        
-        ego_msg->unique_id = 0; // or some unique id
-
-        // 2. Kinematics
-        ego_msg->position.x = status->pos_x;
-        ego_msg->position.y = status->pos_y;
-        ego_msg->position.z = status->pos_z;
-
-        ego_msg->acceleration.x = status->accel_x;
-        ego_msg->acceleration.y = status->accel_y;
-        ego_msg->acceleration.z = status->accel_z;
-
-        // MORAI의 속도(km/h)를 ROS의 속도(m/s)로 변환 (1 km/h = 0.277778 m/s)
-        ego_msg->velocity.x = status->velocity_x * 0.277778;
-        ego_msg->velocity.y = status->velocity_y * 0.277778;
-        ego_msg->velocity.z = status->velocity_z * 0.277778;
-        
-        ego_msg->heading = status->yaw;
-        ego_msg->accel = status->accel;
-        ego_msg->brake = status->brake;
-        ego_msg->wheel_angle = status->steer;
+        const auto stamp = this->now();
 
         auto velocity_status = autoware_vehicle_msgs::msg::VelocityReport();
-        velocity_status.header.stamp = ego_msg->header.stamp;
+        velocity_status.header.stamp = stamp;
         velocity_status.header.frame_id = "base_link";
-        velocity_status.longitudinal_velocity = ego_msg->velocity.x;
-        velocity_status.lateral_velocity = ego_msg->velocity.y;
+        velocity_status.longitudinal_velocity = status->velocity_x * 0.277778;
+        velocity_status.lateral_velocity = status->velocity_y * 0.277778;
         velocity_status.heading_rate = status->angular_velocity_z * M_PI / 180.0;
         velocity_status_pub_->publish(velocity_status);
 
         auto steering_status = autoware_vehicle_msgs::msg::SteeringReport();
-        steering_status.stamp = ego_msg->header.stamp;
+        steering_status.stamp = stamp;
         steering_status.steering_tire_angle = status->steer * M_PI / 180.0;
         steering_status_pub_->publish(steering_status);
 
         auto gear_status = autoware_vehicle_msgs::msg::GearReport();
-        gear_status.stamp = ego_msg->header.stamp;
+        gear_status.stamp = stamp;
         gear_status.report = to_autoware_gear(status->gear);
         gear_status_pub_->publish(gear_status);
 
-        ego_topic_pub_->publish(std::move(ego_msg));
+        auto control_mode = autoware_vehicle_msgs::msg::ControlModeReport();
+        control_mode.stamp = stamp;
+        control_mode.mode = autoware_vehicle_msgs::msg::ControlModeReport::AUTONOMOUS;
+        control_mode_pub_->publish(control_mode);
     }
 
     // ROS 관련 멤버
-    rclcpp::Publisher<morai_msgs::msg::EgoVehicleStatus>::SharedPtr ego_topic_pub_;
     rclcpp::Publisher<autoware_vehicle_msgs::msg::VelocityReport>::SharedPtr
         velocity_status_pub_;
     rclcpp::Publisher<autoware_vehicle_msgs::msg::SteeringReport>::SharedPtr
         steering_status_pub_;
     rclcpp::Publisher<autoware_vehicle_msgs::msg::GearReport>::SharedPtr
         gear_status_pub_;
+    rclcpp::Publisher<autoware_vehicle_msgs::msg::ControlModeReport>::SharedPtr
+        control_mode_pub_;
 
     // UDP 관련 멤버
     std::thread udp_thread_;
     int udp_port_;
-    std::string frame_id_;
 };
 
 int main(int argc, char * argv[])
