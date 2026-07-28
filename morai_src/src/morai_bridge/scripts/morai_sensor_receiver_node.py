@@ -41,12 +41,14 @@ class MoraiSensorReceiver(Node):
         self.declare_parameter("lidar_frame", "lidar")
         self.declare_parameter("gnss_frame", "base_link")
         self.declare_parameter("imu_frame", "imu")
+        self.declare_parameter("slam_mode", True)
 
         bind_ip = self.get_parameter("bind_ip").value
         self.map_frame = self.get_parameter("map_frame").value
         self.lidar_frame = self.get_parameter("lidar_frame").value
         self.gnss_frame = self.get_parameter("gnss_frame").value
         self.imu_frame = self.get_parameter("imu_frame").value
+        self.slam_mode = self.get_parameter("slam_mode").value
         ports = {
             "collision": self.get_parameter("collision_port").value,
             "lidar": self.get_parameter("lidar_port").value,
@@ -209,15 +211,19 @@ class MoraiSensorReceiver(Node):
                 self.get_logger().warning(f"Raw IMU UDP gap: {gap:.3f} s")
         self.last_imu_packet_stamp_ns = packet_stamp_ns
         now_ns = self.get_clock().now().nanoseconds
-        if (
-            self.imu_time_offset_ns is None
-            or abs(packet_stamp_ns + self.imu_time_offset_ns - now_ns) > 1_000_000_000
-        ):
-            self.imu_time_offset_ns = now_ns - packet_stamp_ns
-            self.get_logger().info(
-                f"IMU timestamp offset: {self.imu_time_offset_ns / 1e9:.6f} s"
-            )
-        stamp_ns = packet_stamp_ns + self.imu_time_offset_ns
+        if self.slam_mode:
+            if (
+                self.imu_time_offset_ns is None
+                or abs(packet_stamp_ns + self.imu_time_offset_ns - now_ns)
+                > 1_000_000_000
+            ):
+                self.imu_time_offset_ns = now_ns - packet_stamp_ns
+                self.get_logger().info(
+                    f"IMU timestamp offset: {self.imu_time_offset_ns / 1e9:.6f} s"
+                )
+            stamp_ns = packet_stamp_ns + self.imu_time_offset_ns
+        else:
+            stamp_ns = now_ns
         msg.header.stamp.sec, msg.header.stamp.nanosec = divmod(
             stamp_ns, 1_000_000_000
         )

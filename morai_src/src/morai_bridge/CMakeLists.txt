@@ -63,7 +63,7 @@ install(PROGRAMS
   RENAME navsat_to_gnss_node
 )
 
-install(DIRECTORY launch
+install(DIRECTORY launch config
   DESTINATION share/${PROJECT_NAME}
 )
 
