@@ -112,6 +112,7 @@ void UdpCameraReceiver::loadParameters()
         this->declare_parameter<int>(prefix + "height", 480);
         this->declare_parameter<int>(prefix + "channels", 3);
         this->declare_parameter<double>(prefix + "hfov_deg", default_hfov_deg_);
+        this->declare_parameter<bool>(prefix + "compressed", false);
 
         config.name = this->get_parameter(prefix + "name").as_string();
         config.ip = this->get_parameter(prefix + "ip").as_string();
@@ -121,6 +122,7 @@ void UdpCameraReceiver::loadParameters()
         config.height = this->get_parameter(prefix + "height").as_int();
         config.channels = this->get_parameter(prefix + "channels").as_int();
         config.hfov_deg = this->get_parameter(prefix + "hfov_deg").as_double();
+        config.compressed = this->get_parameter(prefix + "compressed").as_bool();
 
         cameras_.push_back(config);
 
@@ -174,14 +176,30 @@ void UdpCameraReceiver::initializeCameras()
         sockets_.push_back(sock);
 
         // 퍼블리셔 생성
-        auto publisher = this->create_publisher<sensor_msgs::msg::Image>(
-            config.topic_name, 10);
-        publishers_.push_back(publisher);
+        if (config.compressed) {
+            publishers_.push_back(nullptr);
+            compressed_publishers_.push_back(
+                this->create_publisher<sensor_msgs::msg::CompressedImage>(
+                    config.topic_name, 10));
+        } else {
+            publishers_.push_back(
+                this->create_publisher<sensor_msgs::msg::Image>(
+                    config.topic_name, 10));
+            compressed_publishers_.push_back(nullptr);
+        }
 
         if (publish_camera_info_) {
             std::string info_topic = config.topic_name;
+            const std::string compressed_suffix = "/image_raw/compressed";
             const std::string suffix = "/image_raw";
-            if (info_topic.size() >= suffix.size() &&
+            if (info_topic.size() >= compressed_suffix.size() &&
+                info_topic.compare(
+                    info_topic.size() - compressed_suffix.size(),
+                    compressed_suffix.size(), compressed_suffix) == 0) {
+                info_topic =
+                    info_topic.substr(0, info_topic.size() - compressed_suffix.size()) +
+                    "/camera_info";
+            } else if (info_topic.size() >= suffix.size() &&
                 info_topic.compare(info_topic.size() - suffix.size(), suffix.size(), suffix) == 0) {
                 info_topic = info_topic.substr(0, info_topic.size() - suffix.size()) + "/camera_info";
             } else {
@@ -592,6 +610,32 @@ void UdpCameraReceiver::decodeWorkerThread(int worker_id)
         }
 
         const auto& config = cameras_[task.camera_index];
+
+        if (config.compressed) {
+            if (!task.is_jpeg) {
+                RCLCPP_WARN(
+                    this->get_logger(),
+                    "Cam %d: compressed output requires JPEG input",
+                    task.camera_index);
+                continue;
+            }
+
+            auto msg = std::make_unique<sensor_msgs::msg::CompressedImage>();
+            msg->header.stamp = task.stamp;
+            msg->header.frame_id = config.name;
+            msg->format = "jpeg";
+            msg->data = std::move(task.data);
+            compressed_publishers_[task.camera_index]->publish(std::move(msg));
+
+            if (publish_camera_info_) {
+                auto info_msg = camera_info_msgs_[task.camera_index];
+                info_msg.header.stamp = task.stamp;
+                info_msg.header.frame_id = config.name;
+                camera_info_publishers_[task.camera_index]->publish(info_msg);
+            }
+            continue;
+        }
+
         auto msg = std::make_unique<sensor_msgs::msg::Image>();
         msg->header.stamp = task.stamp;
         msg->header.frame_id = config.name;

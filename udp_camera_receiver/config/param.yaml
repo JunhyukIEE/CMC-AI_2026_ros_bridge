@@ -4,7 +4,7 @@
     debug_mode: false
 
     # 동기화 활성화
-    enable_sync: true
+    enable_sync: false
     # 동기화 타임아웃 (초) - 이 시간 안에 모든 카메라 데이터가 도착하지 않으면 해당 프레임 ID 폐기
     sync_timeout_sec: 0.1
     # 동기화 윈도우 (밀리초) - 이 범위 내의 frame_id를 같은 프레임으로 취급
@@ -17,44 +17,35 @@
     frame_timeout_sec: 1.0
 
     # 카메라 개수
-    num_cameras: 4
+    num_cameras: 1
 
-    # 카메라 0 설정
+    # 한 대만 실행하므로 camera_0 슬롯에 MORAI 카메라 3(port 9004)을 매핑
     camera_0:
-      name: "front_camera"
+      name: "traffic_light_left_camera/camera_optical_link"
       ip: "192.168.0.37"
-      port: 9001
-      topic_name: "/camera/front/image_raw"
-      width: 320
-      height: 240
-      channels: 3 # MORAI JPEG는 디코딩 후 3채널(BGR)
+      port: 9004
+      topic_name: "/sensing/camera/camera7/image_raw/compressed"
+      width: 640
+      height: 480
+      channels: 3
+      compressed: true
 
     # 카메라 1 설정
-    camera_1:
-      name: "front_left_camera"
-      ip: "192.168.0.37"
-      port: 9002
-      topic_name: "/camera/front_left/image_raw"
-      width: 320
-      height: 240
-      channels: 3
+    # camera_1:
+    #   name: "left_camera"
+    #   ip: "192.168.0.37"
+    #   port: 9002
+    #   topic_name: "/camera/left_camera/image_raw"
+    #   width: 640
+    #   height: 480
+    #   channels: 3
 
     # 카메라 2 설정
-    camera_2:
-      name: "rear_left_camera"
-      ip: "192.168.0.37"
-      port: 9003
-      topic_name: "/camera/rear_left/image_raw"
-      width: 320
-      height: 240
-      channels: 3
-
-    # 카메라 3 설정
-    camera_3:
-       name: "rear_right_camera"
-       ip: "192.168.0.37"
-       port: 9004
-       topic_name: "/camera/rear_right/image_raw"
-       width: 320
-       height: 240
-       channels: 3
+    # camera_2:
+    #   name: "right_camera"
+    #   ip: "192.168.0.37"
+    #   port: 9003
+    #   topic_name: "/camera/right_camera/image_raw"
+    #   width: 640
+    #   height: 480
+    #   channels: 3

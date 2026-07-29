@@ -3,6 +3,7 @@
 
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/image.hpp>
+#include <sensor_msgs/msg/compressed_image.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
 #include <cv_bridge/cv_bridge.h>
 #include <opencv2/opencv.hpp>
@@ -53,6 +54,7 @@ struct CameraConfig {
     int height;
     int channels;
     double hfov_deg;
+    bool compressed;
 };
 
 // 프레임 버퍼 구조체
@@ -107,6 +109,8 @@ private:
 
     // 퍼블리셔
     std::vector<rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr> publishers_;
+    std::vector<rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr>
+        compressed_publishers_;
     std::vector<rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr> camera_info_publishers_;
     std::vector<sensor_msgs::msg::CameraInfo> camera_info_msgs_;
 
