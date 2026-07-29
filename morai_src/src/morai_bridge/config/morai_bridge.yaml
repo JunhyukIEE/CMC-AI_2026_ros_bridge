@@ -1,3 +1,7 @@
 morai_sensor_receiver_node:
   ros__parameters:
     slam_mode: false
+    map_frame: map
+    lidar_frame: velodyne_top
+    gnss_frame: gnss_link
+    imu_frame: imu
