@@ -18,7 +18,7 @@ constexpr float MAX_STEERING_ANGLE_RAD = 40.0f * 3.14159265358979323846f / 180.0
 constexpr float to_morai_steering(float steering_tire_angle)
 {
     return std::clamp(
-        -steering_tire_angle / MAX_STEERING_ANGLE_RAD, -1.0f, 1.0f);
+        steering_tire_angle / MAX_STEERING_ANGLE_RAD, -1.0f, 1.0f);
 }
 
 constexpr int to_morai_gear(uint8_t gear)
@@ -36,8 +36,8 @@ constexpr int to_morai_gear(uint8_t gear)
 static_assert(to_morai_gear(autoware_vehicle_msgs::msg::GearCommand::PARK) == 1);
 static_assert(to_morai_gear(autoware_vehicle_msgs::msg::GearCommand::REVERSE) == 2);
 static_assert(to_morai_gear(autoware_vehicle_msgs::msg::GearCommand::DRIVE) == 4);
-static_assert(to_morai_steering(MAX_STEERING_ANGLE_RAD) == -1.0f);
-static_assert(to_morai_steering(-MAX_STEERING_ANGLE_RAD) == 1.0f);
+static_assert(to_morai_steering(MAX_STEERING_ANGLE_RAD) == 1.0f);
+static_assert(to_morai_steering(-MAX_STEERING_ANGLE_RAD) == -1.0f);
 
 // MORAI CtrlCmd UDP 패킷 구조체
 #pragma pack(push, 1)
