@@ -3,9 +3,11 @@
 #include "autoware_vehicle_msgs/msg/gear_report.hpp"
 #include "autoware_vehicle_msgs/msg/steering_report.hpp"
 #include "autoware_vehicle_msgs/msg/velocity_report.hpp"
+#include "tier4_system_msgs/msg/operation_mode_availability.hpp"
 #include "tf2/LinearMath/Quaternion.h"
 #include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
 
+#include <chrono>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -110,6 +112,13 @@ public:
         control_mode_pub_ =
             this->create_publisher<autoware_vehicle_msgs::msg::ControlModeReport>(
                 "/vehicle/status/control_mode", 10);
+        operation_mode_availability_pub_ =
+            this->create_publisher<tier4_system_msgs::msg::OperationModeAvailability>(
+                "/system/operation_mode/availability",
+                rclcpp::QoS(rclcpp::KeepLast(1)).reliable().durability_volatile());
+        operation_mode_availability_timer_ = this->create_wall_timer(
+            std::chrono::milliseconds(100),
+            std::bind(&MoraiReceiverNode::publish_operation_mode_availability, this));
 
         RCLCPP_INFO(this->get_logger(), "MoraiBridgeNode has been started.");
         RCLCPP_INFO(this->get_logger(), "Listening for UDP packets on port: %d", udp_port_);
@@ -127,6 +136,20 @@ public:
     }
 
 private:
+    void publish_operation_mode_availability()
+    {
+        auto availability = tier4_system_msgs::msg::OperationModeAvailability();
+        availability.stamp = this->now();
+        availability.stop = true;
+        availability.autonomous = true;
+        availability.local = true;
+        availability.remote = true;
+        availability.emergency_stop = false;
+        availability.comfortable_stop = false;
+        availability.pull_over = false;
+        operation_mode_availability_pub_->publish(availability);
+    }
+
     void udp_listener()
     {
         int sockfd;
@@ -222,6 +245,9 @@ private:
         gear_status_pub_;
     rclcpp::Publisher<autoware_vehicle_msgs::msg::ControlModeReport>::SharedPtr
         control_mode_pub_;
+    rclcpp::Publisher<tier4_system_msgs::msg::OperationModeAvailability>::SharedPtr
+        operation_mode_availability_pub_;
+    rclcpp::TimerBase::SharedPtr operation_mode_availability_timer_;
 
     // UDP 관련 멤버
     std::thread udp_thread_;

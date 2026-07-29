@@ -12,6 +12,7 @@ find_package(rclpy REQUIRED)
 find_package(morai_msgs REQUIRED)
 find_package(autoware_control_msgs REQUIRED)
 find_package(autoware_vehicle_msgs REQUIRED)
+find_package(tier4_system_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
@@ -29,6 +30,7 @@ ament_target_dependencies(
   "rclcpp"
   "morai_msgs"
   "autoware_vehicle_msgs"
+  "tier4_system_msgs"
   "tf2"
   "tf2_geometry_msgs"
 )
