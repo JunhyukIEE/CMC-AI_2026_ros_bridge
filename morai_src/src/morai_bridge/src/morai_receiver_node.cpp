@@ -199,7 +199,7 @@ private:
 
         auto steering_status = autoware_vehicle_msgs::msg::SteeringReport();
         steering_status.stamp = stamp;
-        steering_status.steering_tire_angle = status->steer * M_PI / 180.0;
+        steering_status.steering_tire_angle = -status->steer * M_PI / 180.0;
         steering_status_pub_->publish(steering_status);
 
         auto gear_status = autoware_vehicle_msgs::msg::GearReport();

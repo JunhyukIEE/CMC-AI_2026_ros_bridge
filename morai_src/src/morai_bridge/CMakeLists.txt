@@ -10,6 +10,7 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclpy REQUIRED)
 find_package(morai_msgs REQUIRED)
+find_package(autoware_control_msgs REQUIRED)
 find_package(autoware_vehicle_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
@@ -42,7 +43,7 @@ target_compile_features(morai_sender_node PUBLIC c_std_99 cxx_std_17)
 ament_target_dependencies(
   morai_sender_node
   "rclcpp"
-  "morai_msgs"
+  "autoware_control_msgs"
   "autoware_vehicle_msgs"
 )
 

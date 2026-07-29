@@ -1,7 +1,8 @@
 #include "rclcpp/rclcpp.hpp"
+#include "autoware_control_msgs/msg/control.hpp"
 #include "autoware_vehicle_msgs/msg/gear_command.hpp"
-#include "morai_msgs/msg/ctrl_cmd.hpp"
 
+#include <algorithm>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -11,6 +12,14 @@
 #include <unistd.h>
 
 using namespace std::placeholders;
+
+constexpr float MAX_STEERING_ANGLE_RAD = 40.0f * 3.14159265358979323846f / 180.0f;
+
+constexpr float to_morai_steering(float steering_tire_angle)
+{
+    return std::clamp(
+        -steering_tire_angle / MAX_STEERING_ANGLE_RAD, -1.0f, 1.0f);
+}
 
 constexpr int to_morai_gear(uint8_t gear)
 {
@@ -27,6 +36,8 @@ constexpr int to_morai_gear(uint8_t gear)
 static_assert(to_morai_gear(autoware_vehicle_msgs::msg::GearCommand::PARK) == 1);
 static_assert(to_morai_gear(autoware_vehicle_msgs::msg::GearCommand::REVERSE) == 2);
 static_assert(to_morai_gear(autoware_vehicle_msgs::msg::GearCommand::DRIVE) == 4);
+static_assert(to_morai_steering(MAX_STEERING_ANGLE_RAD) == -1.0f);
+static_assert(to_morai_steering(-MAX_STEERING_ANGLE_RAD) == 1.0f);
 
 // MORAI CtrlCmd UDP 패킷 구조체
 #pragma pack(push, 1)
@@ -68,8 +79,9 @@ public:
         cmd_udp_port_ = this->get_parameter("cmd_udp_port").as_int();
 
         // 제어 명령을 받는 서브스크라이버 생성
-        subscription_ = this->create_subscription<morai_msgs::msg::CtrlCmd>(
-            "/control/command/ctrl_cmd", 10, std::bind(&MoraiSenderNode::ctrl_cmd_callback, this, _1));
+        subscription_ = this->create_subscription<autoware_control_msgs::msg::Control>(
+            "/control/command/control_cmd", 1,
+            std::bind(&MoraiSenderNode::ctrl_cmd_callback, this, _1));
         gear_subscription_ =
             this->create_subscription<autoware_vehicle_msgs::msg::GearCommand>(
                 "/control/command/gear_cmd", 10,
@@ -120,7 +132,7 @@ private:
         }
     } // <--- Added missing closing brace here
 
-    void ctrl_cmd_callback(const morai_msgs::msg::CtrlCmd::SharedPtr msg)
+    void ctrl_cmd_callback(const autoware_control_msgs::msg::Control::SharedPtr msg)
     {
         if (send_sockfd_ < 0) {
             RCLCPP_WARN(this->get_logger(), "UDP socket is not ready.");
@@ -142,12 +154,12 @@ private:
         CtrlCommandPacket cmd_packet;
         cmd_packet.mode = 2;       // 2: AutoMode
         cmd_packet.gear = current_gear_;
-        cmd_packet.cmd_type = 1;   // 1: Throttle
-        cmd_packet.velocity = 0.0f;
-        cmd_packet.acceleration = 0.0f;
-        cmd_packet.accel = msg->accel;
-        cmd_packet.brake = msg->brake;
-        cmd_packet.steering = msg->steering;
+        cmd_packet.cmd_type = msg->longitudinal.is_defined_acceleration ? 3 : 2;
+        cmd_packet.velocity = msg->longitudinal.velocity * 3.6f;
+        cmd_packet.acceleration = msg->longitudinal.acceleration;
+        cmd_packet.accel = 0.0f;
+        cmd_packet.brake = 0.0f;
+        cmd_packet.steering = to_morai_steering(msg->lateral.steering_tire_angle);
 
         // 3. 전체 UDP 패킷 조립 (헤더 + 본문 + 테일)
         std::vector<unsigned char> packet_data;
@@ -168,7 +180,7 @@ private:
     }
 
     // ROS 관련 멤버
-    rclcpp::Subscription<morai_msgs::msg::CtrlCmd>::SharedPtr subscription_;
+    rclcpp::Subscription<autoware_control_msgs::msg::Control>::SharedPtr subscription_;
     rclcpp::Subscription<autoware_vehicle_msgs::msg::GearCommand>::SharedPtr
         gear_subscription_;
 
