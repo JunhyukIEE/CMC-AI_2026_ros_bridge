@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=MORAI Traffic Light Control
+Comment=Open the local MORAI traffic-light control map
+Exec=xdg-open http://127.0.0.1:18080
+Icon=applications-engineering
+Terminal=false
+Categories=Development;Robotics;
