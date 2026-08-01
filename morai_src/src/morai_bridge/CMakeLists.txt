@@ -49,9 +49,19 @@ ament_target_dependencies(
   "autoware_vehicle_msgs"
 )
 
+# Traffic-light sender node
+add_executable(morai_traffic_light_sender_node src/morai_traffic_light_sender_node.cpp)
+target_compile_features(morai_traffic_light_sender_node PUBLIC c_std_99 cxx_std_17)
+ament_target_dependencies(
+  morai_traffic_light_sender_node
+  "rclcpp"
+  "morai_msgs"
+)
+
 install(TARGETS 
   morai_receiver_node
   morai_sender_node
+  morai_traffic_light_sender_node
   DESTINATION lib/${PROJECT_NAME})
 
 install(PROGRAMS
@@ -64,6 +74,12 @@ install(PROGRAMS
   scripts/navsat_to_gnss_node.py
   DESTINATION lib/${PROJECT_NAME}
   RENAME navsat_to_gnss_node
+)
+
+install(PROGRAMS
+  scripts/traffic_light_map_ui_node.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME traffic_light_map_ui_node
 )
 
 install(DIRECTORY launch config
