@@ -107,7 +107,7 @@ def generate_launch_description():
             ),
             static_tf(
                 "base_link", "traffic_light_left_camera/camera_link",
-                (1.8, 0.0, 1.3), (0.0, -15.0, 0.0),
+                (-0.3, 0.0, 1.4), (0.0, 340.0, 0.0),
             ),
             static_tf(
                 "traffic_light_left_camera/camera_link",
