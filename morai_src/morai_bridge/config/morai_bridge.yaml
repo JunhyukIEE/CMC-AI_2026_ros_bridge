@@ -1,10 +1,12 @@
 morai_sensor_receiver_node:
   ros__parameters:
-    slam_mode: false
+    slam_mode: true
     map_frame: map
     lidar_frame: velodyne_top
     gnss_frame: gnss_link
     imu_frame: imu
+    # Set to 0.0 to publish the original MORAI orientation without correction.
+    imu_yaw_offset_deg: -1.347045
 
 morai_traffic_light_sender_node:
   ros__parameters:
@@ -14,7 +16,7 @@ morai_traffic_light_sender_node:
 
 traffic_light_map_ui:
   ros__parameters:
-    map_path: "/home/sws/autoware_map/K_city/K_city_26.osm"
+    map_path: "~/autoware_map/K_city/K_city_26.osm"
     host: "127.0.0.1"
     port: 18080
     output_topic: "/SetTrafficLight"

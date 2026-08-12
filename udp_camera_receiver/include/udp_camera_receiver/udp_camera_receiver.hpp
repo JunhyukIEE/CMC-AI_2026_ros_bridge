@@ -96,9 +96,6 @@ private:
     void cleanupNvJpeg();
     bool decodeJpegGpu(int worker_id, const std::vector<uint8_t>& jpeg_data,
                        std::vector<uint8_t>& rgb_data, int& width, int& height);
-    void publishImage(
-        int camera_index, uint32_t frame_id, bool is_jpeg, const std::vector<uint8_t>& data,
-        const rclcpp::Time& stamp);
     void queueDecodeTask(DecodeTask&& task);
 
     // 카메라 설정

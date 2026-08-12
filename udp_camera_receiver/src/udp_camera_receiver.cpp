@@ -1,9 +1,26 @@
 #include "udp_camera_receiver/udp_camera_receiver.hpp"
 #include <cstring>
 #include <cmath>
+#include <utility>
 
 namespace udp_camera_receiver
 {
+
+namespace
+{
+std::string imageTopic(std::string topic, bool compressed)
+{
+    const std::string suffix = "/compressed";
+    const bool has_suffix = topic.size() >= suffix.size() &&
+        topic.compare(topic.size() - suffix.size(), suffix.size(), suffix) == 0;
+    if (compressed && !has_suffix) {
+        topic += suffix;
+    } else if (!compressed && has_suffix) {
+        topic.erase(topic.size() - suffix.size());
+    }
+    return topic;
+}
+}  // namespace
 
 UdpCameraReceiver::UdpCameraReceiver(const rclcpp::NodeOptions & options)
 : Node("udp_camera_receiver", options), running_(true), nvjpeg_initialized_(false)
@@ -123,6 +140,7 @@ void UdpCameraReceiver::loadParameters()
         config.channels = this->get_parameter(prefix + "channels").as_int();
         config.hfov_deg = this->get_parameter(prefix + "hfov_deg").as_double();
         config.compressed = this->get_parameter(prefix + "compressed").as_bool();
+        config.topic_name = imageTopic(config.topic_name, config.compressed);
 
         cameras_.push_back(config);
 
@@ -134,6 +152,7 @@ void UdpCameraReceiver::loadParameters()
 
 void UdpCameraReceiver::initializeCameras()
 {
+    const auto camera_qos = rclcpp::SensorDataQoS().keep_last(1);
     for (size_t i = 0; i < cameras_.size(); ++i) {
         const auto& config = cameras_[i];
 
@@ -180,11 +199,11 @@ void UdpCameraReceiver::initializeCameras()
             publishers_.push_back(nullptr);
             compressed_publishers_.push_back(
                 this->create_publisher<sensor_msgs::msg::CompressedImage>(
-                    config.topic_name, 10));
+                    config.topic_name, camera_qos));
         } else {
             publishers_.push_back(
                 this->create_publisher<sensor_msgs::msg::Image>(
-                    config.topic_name, 10));
+                    config.topic_name, camera_qos));
             compressed_publishers_.push_back(nullptr);
         }
 
@@ -206,7 +225,8 @@ void UdpCameraReceiver::initializeCameras()
                 info_topic += "/camera_info";
             }
 
-            auto camera_info_pub = this->create_publisher<sensor_msgs::msg::CameraInfo>(info_topic, 10);
+            auto camera_info_pub = this->create_publisher<sensor_msgs::msg::CameraInfo>(
+                info_topic, camera_qos);
             camera_info_publishers_.push_back(camera_info_pub);
 
             sensor_msgs::msg::CameraInfo info_msg;
@@ -307,7 +327,7 @@ void UdpCameraReceiver::cleanupNvJpeg()
 }
 
 bool UdpCameraReceiver::decodeJpegGpu(int worker_id, const std::vector<uint8_t>& jpeg_data,
-                                       std::vector<uint8_t>& bgr_data, int& width, int& height)
+                                       std::vector<uint8_t>& rgb_data, int& width, int& height)
 {
     if (!nvjpeg_initialized_ || worker_id >= kNumDecodeWorkers) {
         return false;
@@ -337,7 +357,7 @@ bool UdpCameraReceiver::decodeJpegGpu(int worker_id, const std::vector<uint8_t>&
         output_image.pitch[c] = 0;
     }
 
-    // BGR interleaved 출력 (3채널)
+    // RGB interleaved 출력 (3채널)
     size_t pitch = width * 3;
     unsigned char* d_output = nullptr;
     cudaError_t cuda_status = cudaMalloc(&d_output, pitch * height);
@@ -348,11 +368,11 @@ bool UdpCameraReceiver::decodeJpegGpu(int worker_id, const std::vector<uint8_t>&
     output_image.channel[0] = d_output;
     output_image.pitch[0] = pitch;
 
-    // 디코딩 (BGR interleaved)
+    // 디코딩 (RGB interleaved)
     status = nvjpegDecode(
         nvjpeg_handle_, nvjpeg_states_[worker_id],
         jpeg_data.data(), jpeg_data.size(),
-        NVJPEG_OUTPUT_BGRI, &output_image,
+        NVJPEG_OUTPUT_RGBI, &output_image,
         cuda_streams_[worker_id]);
 
     if (status != NVJPEG_STATUS_SUCCESS) {
@@ -364,8 +384,8 @@ bool UdpCameraReceiver::decodeJpegGpu(int worker_id, const std::vector<uint8_t>&
     cudaStreamSynchronize(cuda_streams_[worker_id]);
 
     // GPU -> CPU 복사
-    bgr_data.resize(pitch * height);
-    cuda_status = cudaMemcpy(bgr_data.data(), d_output, pitch * height, cudaMemcpyDeviceToHost);
+    rgb_data.resize(pitch * height);
+    cuda_status = cudaMemcpy(rgb_data.data(), d_output, pitch * height, cudaMemcpyDeviceToHost);
     cudaFree(d_output);
 
     return cuda_status == cudaSuccess;
@@ -642,17 +662,17 @@ void UdpCameraReceiver::decodeWorkerThread(int worker_id)
 
         if (task.is_jpeg) {
             // GPU 디코딩 시도
-            std::vector<uint8_t> bgr_data;
+            std::vector<uint8_t> rgb_data;
             int width, height;
-            bool gpu_success = decodeJpegGpu(worker_id, task.data, bgr_data, width, height);
+            bool gpu_success = decodeJpegGpu(worker_id, task.data, rgb_data, width, height);
 
             if (gpu_success) {
                 msg->height = height;
                 msg->width = width;
-                msg->encoding = "bgr8";
+                msg->encoding = "rgb8";
                 msg->is_bigendian = false;
                 msg->step = width * 3;
-                msg->data = std::move(bgr_data);
+                msg->data = std::move(rgb_data);
             } else {
                 // CPU 폴백
                 cv::Mat image = cv::imdecode(task.data, cv::IMREAD_COLOR);
@@ -661,10 +681,11 @@ void UdpCameraReceiver::decodeWorkerThread(int worker_id)
                                 task.camera_index, task.data.size());
                     continue;
                 }
+                cv::cvtColor(image, image, cv::COLOR_BGR2RGB);
 
                 msg->height = image.rows;
                 msg->width = image.cols;
-                msg->encoding = "bgr8";
+                msg->encoding = "rgb8";
                 msg->is_bigendian = false;
                 msg->step = image.cols * image.elemSize();
 
@@ -684,7 +705,7 @@ void UdpCameraReceiver::decodeWorkerThread(int worker_id)
             msg->is_bigendian = false;
 
             if (config.channels == 3) {
-                msg->encoding = "bgr8";
+                msg->encoding = "rgb8";
                 msg->step = config.width * 3;
             } else {
                 msg->encoding = "mono8";
@@ -692,6 +713,11 @@ void UdpCameraReceiver::decodeWorkerThread(int worker_id)
             }
 
             msg->data = std::move(task.data);
+            if (config.channels == 3) {
+                for (size_t i = 0; i + 2 < msg->data.size(); i += 3) {
+                    std::swap(msg->data[i], msg->data[i + 2]);
+                }
+            }
         }
 
         publishers_[task.camera_index]->publish(std::move(msg));
@@ -707,66 +733,6 @@ void UdpCameraReceiver::decodeWorkerThread(int worker_id)
             RCLCPP_INFO(this->get_logger(), "Cam %d: Published frame %u (worker %d)",
                        task.camera_index, task.frame_id, worker_id);
         }
-    }
-}
-
-void UdpCameraReceiver::publishImage(int camera_index, uint32_t frame_id, bool is_jpeg, const std::vector<uint8_t>& data, const rclcpp::Time& stamp)
-{
-    const auto& config = cameras_[camera_index];
-
-    auto msg = std::make_unique<sensor_msgs::msg::Image>();
-    msg->header.stamp = stamp;
-    msg->header.frame_id = config.name;
-
-    if (is_jpeg) {
-        cv::Mat image = cv::imdecode(data, cv::IMREAD_COLOR);
-        if (image.empty()) {
-            RCLCPP_ERROR(this->get_logger(), "Cam %d: Failed to decode JPEG (size=%zu)", camera_index, data.size());
-            return;
-        }
-
-        msg->height = image.rows;
-        msg->width = image.cols;
-        msg->encoding = "bgr8";
-        msg->is_bigendian = false;
-        msg->step = image.cols * image.elemSize();
-
-        size_t data_size = msg->step * image.rows;
-        msg->data.resize(data_size);
-        if (image.isContinuous()) {
-            std::memcpy(msg->data.data(), image.data, data_size);
-        } else {
-            for (int row = 0; row < image.rows; ++row) {
-                std::memcpy(msg->data.data() + row * msg->step, image.ptr(row), msg->step);
-            }
-        }
-    } else {
-        msg->height = config.height;
-        msg->width = config.width;
-        msg->is_bigendian = false;
-
-        if (config.channels == 3) {
-            msg->encoding = "bgr8";
-            msg->step = config.width * 3;
-        } else {
-            msg->encoding = "mono8";
-            msg->step = config.width;
-        }
-
-        msg->data = data;  // copy (필요시 외부에서 move 가능)
-    }
-
-    publishers_[camera_index]->publish(std::move(msg));
-
-    if (publish_camera_info_) {
-        auto info_msg = camera_info_msgs_[camera_index];
-        info_msg.header.stamp = stamp;
-        info_msg.header.frame_id = config.name;
-        camera_info_publishers_[camera_index]->publish(info_msg);
-    }
-
-    if (debug_mode_) {
-        RCLCPP_INFO(this->get_logger(), "Cam %d: Published frame %u", camera_index, frame_id);
     }
 }
 
