@@ -2,12 +2,65 @@
 #include <cstring>
 #include <cmath>
 #include <utility>
+#include <algorithm>
+#include <cctype>
+#include <limits>
+#include <iomanip>
+#include <sstream>
 
 namespace udp_camera_receiver
 {
 
 namespace
 {
+constexpr size_t kHeaderSize = 19;
+constexpr size_t kTailSize = 2;
+constexpr size_t kBoxObjectSize = 115;
+
+uint32_t readLe32(const uint8_t* data)
+{
+    return static_cast<uint32_t>(data[0]) |
+        (static_cast<uint32_t>(data[1]) << 8) |
+        (static_cast<uint32_t>(data[2]) << 16) |
+        (static_cast<uint32_t>(data[3]) << 24);
+}
+
+float readLeFloat(const uint8_t* data)
+{
+    const uint32_t bits = readLe32(data);
+    float value;
+    std::memcpy(&value, &bits, sizeof(value));
+    return value;
+}
+
+bool parseHeader(const uint8_t* data, size_t length, PacketHeader& header)
+{
+    if (length < kHeaderSize + kTailSize) return false;
+    std::copy_n(reinterpret_cast<const char*>(data), 3, header.magic.begin());
+    header.total_second = readLe32(data + 3);
+    header.fraction = readLe32(data + 7);
+    header.packet_index = readLe32(data + 11);
+    header.payload_size = readLe32(data + 15);
+    // MORAI pads UDP datagrams to 65,000 bytes; Size is the useful payload length.
+    return header.payload_size <= length - kHeaderSize - kTailSize;
+}
+
+bool magicIs(const PacketHeader& header, const char* magic)
+{
+    return std::equal(header.magic.begin(), header.magic.end(), magic);
+}
+
+bool timestampNanoseconds(const PacketHeader& header, bool is_box, uint64_t& timestamp_ns)
+{
+    (void)is_box;
+    // Actual 24.R2 BOX packets use nanoseconds despite the web page saying milliseconds.
+    if (header.fraction >= 1000000000U) {
+        return false;
+    }
+    timestamp_ns = header.total_second * 1000000000ULL + header.fraction;
+    return timestamp_ns <= static_cast<uint64_t>(std::numeric_limits<int64_t>::max());
+}
+
 std::string imageTopic(std::string topic, bool compressed)
 {
     const std::string suffix = "/compressed";
@@ -20,7 +73,59 @@ std::string imageTopic(std::string topic, bool compressed)
     }
     return topic;
 }
+
+std::string cameraBaseTopic(std::string topic)
+{
+    const auto pos = topic.find("/image_raw");
+    if (pos != std::string::npos) topic.erase(pos);
+    return topic;
+}
 }  // namespace
+
+bool parseBoxPayload(
+    const uint8_t* data, size_t size, std::vector<BoxObject>& objects,
+    std::string& error)
+{
+    objects.clear();
+    if (size % kBoxObjectSize != 0) {
+        error = "payload size is not a multiple of 115";
+        return false;
+    }
+
+    objects.reserve(size / kBoxObjectSize);
+    for (size_t offset = 0; offset < size; offset += kBoxObjectSize) {
+        BoxObject object;
+        for (size_t i = 0; i < object.corners_3d.size(); ++i) {
+            object.corners_3d[i] = readLeFloat(data + offset + i * sizeof(float));
+            if (!std::isfinite(object.corners_3d[i])) {
+                error = "3D bbox contains NaN/Inf";
+                return false;
+            }
+        }
+        for (size_t i = 0; i < object.bbox_2d_raw.size(); ++i) {
+            object.bbox_2d_raw[i] = readLeFloat(data + offset + 96 + i * sizeof(float));
+            if (!std::isfinite(object.bbox_2d_raw[i])) {
+                error = "2D bbox contains NaN/Inf";
+                return false;
+            }
+        }
+        object.class_tag.assign(reinterpret_cast<const char*>(data + offset + 112), 3);
+        object.class_tag.erase(
+            std::remove_if(object.class_tag.begin(), object.class_tag.end(), [](unsigned char c) {
+                return c == '\0' || std::isspace(c);
+            }), object.class_tag.end());
+        objects.push_back(std::move(object));
+    }
+    return true;
+}
+
+std::string boxClassLabel(const std::string& raw_tag)
+{
+    if (raw_tag == std::string("\xff\x02\x02", 3)) return "Vehicle";
+    if (raw_tag == std::string("\x62\x02\xff", 3)) return "Pedestrian";
+    if (raw_tag == std::string("\xec\xff\x02", 3)) return "Obstacle";
+    return "Unknown";
+}
 
 UdpCameraReceiver::UdpCameraReceiver(const rclcpp::NodeOptions & options)
 : Node("udp_camera_receiver", options), running_(true), nvjpeg_initialized_(false)
@@ -90,8 +195,10 @@ void UdpCameraReceiver::loadParameters()
 {
     // 일반 파라미터
     this->declare_parameter<bool>("debug_mode", false);
+    this->declare_parameter<bool>("publish_bbox_overlay", false);
     this->declare_parameter<int>("max_buffered_frames", 3);
     this->declare_parameter<double>("frame_timeout_sec", 1.0);
+    this->declare_parameter<double>("bbox_match_tolerance_ms", 20.0);
     this->declare_parameter<bool>("publish_camera_info", true);
     this->declare_parameter<double>("hfov_deg", 90.0);
     this->declare_parameter<bool>("enable_sync", false);
@@ -99,8 +206,10 @@ void UdpCameraReceiver::loadParameters()
     this->declare_parameter<double>("sync_window_ms", 30.0);  // 기본 30ms 윈도우
 
     this->get_parameter("debug_mode", debug_mode_);
+    this->get_parameter("publish_bbox_overlay", publish_bbox_overlay_);
     this->get_parameter("max_buffered_frames", max_buffered_frames_);
     this->get_parameter("frame_timeout_sec", frame_timeout_sec_);
+    this->get_parameter("bbox_match_tolerance_ms", bbox_match_tolerance_ms_);
     this->get_parameter("publish_camera_info", publish_camera_info_);
     default_hfov_deg_ = this->get_parameter("hfov_deg").as_double();
     this->get_parameter("enable_sync", enable_sync_);
@@ -207,6 +316,18 @@ void UdpCameraReceiver::initializeCameras()
             compressed_publishers_.push_back(nullptr);
         }
 
+        const std::string base_topic = cameraBaseTopic(config.topic_name);
+        detection_publishers_.push_back(
+            this->create_publisher<vision_msgs::msg::Detection2DArray>(
+                base_topic + "/ground_truth/detections", camera_qos));
+        if (publish_bbox_overlay_) {
+            overlay_publishers_.push_back(
+                this->create_publisher<sensor_msgs::msg::Image>(
+                    base_topic + "/ground_truth/debug_overlay", camera_qos));
+        } else {
+            overlay_publishers_.push_back(nullptr);
+        }
+
         if (publish_camera_info_) {
             std::string info_topic = config.topic_name;
             const std::string compressed_suffix = "/image_raw/compressed";
@@ -267,7 +388,11 @@ void UdpCameraReceiver::initializeCameras()
         }
 
         // 프레임 버퍼 초기화
-        frame_buffers_.push_back(std::map<uint32_t, FrameBuffer>());
+        frame_buffers_.emplace_back();
+        box_buffers_.emplace_back();
+        recent_image_timestamps_.emplace_back();
+        overlay_images_.emplace_back();
+        overlay_boxes_.emplace_back();
         buffer_mutexes_.push_back(std::make_unique<std::mutex>());
 
         // 수신 스레드 시작
@@ -424,22 +549,55 @@ void UdpCameraReceiver::receiveThread(int camera_index)
 
 void UdpCameraReceiver::processPacket(int camera_index, const uint8_t* data, size_t length)
 {
-    if (length < sizeof(PacketHeader)) return;
+    PacketHeader header;
+    if (!parseHeader(data, length, header)) {
+        if (length >= kHeaderSize) {
+            RCLCPP_WARN_THROTTLE(
+                get_logger(), *get_clock(), 2000,
+                "Cam %d: invalid %.3s packet length=%zu sec=%u fraction=%u index=%u size=%u",
+                camera_index, reinterpret_cast<const char*>(data), length, readLe32(data + 3),
+                readLe32(data + 7), readLe32(data + 11), readLe32(data + 15));
+        } else {
+            RCLCPP_WARN_THROTTLE(
+                get_logger(), *get_clock(), 2000, "Cam %d: short UDP packet length=%zu",
+                camera_index, length);
+        }
+        return;
+    }
+    const bool is_mor = magicIs(header, "MOR");
+    const bool is_box = magicIs(header, "BOX");
+    if (!is_mor && !is_box) return;
+    if (header.packet_index > 100000U) {
+        RCLCPP_WARN(get_logger(), "Cam %d: unreasonable packet index %u", camera_index, header.packet_index);
+        return;
+    }
 
-    const PacketHeader* header = reinterpret_cast<const PacketHeader*>(data);
-    bool is_mor = (strncmp(header->magic, "MOR", 3) == 0);
-    if (!is_mor) return;
+    uint64_t timestamp_ns;
+    if (!timestampNanoseconds(header, is_box, timestamp_ns)) {
+        RCLCPP_WARN(get_logger(), "Cam %d: invalid MORAI timestamp fraction %u", camera_index, header.fraction);
+        return;
+    }
 
-    const uint8_t* payload = data + sizeof(PacketHeader);
-    size_t payload_size = header->payload_size;
+    const uint8_t* payload = data + kHeaderSize;
+    const uint8_t* tail = data + length - kTailSize;
+    const bool is_last = is_mor ? (tail[0] == 'E' && tail[1] == 'I') :
+        (tail[0] == 'E' && tail[1] == 'O');
+    const bool valid_tail = is_last ||
+        (is_mor && tail[0] == 'A' && tail[1] == 'I');
+    if (!valid_tail) {
+        RCLCPP_WARN_THROTTLE(
+            get_logger(), *get_clock(), 2000, "Cam %d: invalid %.3s packet tail", camera_index,
+            header.magic.data());
+        return;
+    }
 
     std::unique_lock<std::mutex> lock(*buffer_mutexes_[camera_index]);
-    auto& buffers = frame_buffers_[camera_index];
+    auto& buffers = is_box ? box_buffers_[camera_index] : frame_buffers_[camera_index];
 
-    if (buffers.find(header->frame_id) == buffers.end()) {
+    if (buffers.find(timestamp_ns) == buffers.end()) {
         auto now = std::chrono::steady_clock::now();
         for (auto it = buffers.begin(); it != buffers.end(); ) {
-            auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - it->second.last_update).count();
+            const double elapsed = std::chrono::duration<double>(now - it->second.last_update).count();
             if (elapsed > frame_timeout_sec_ || buffers.size() >= static_cast<size_t>(max_buffered_frames_)) {
                 it = buffers.erase(it);
             } else {
@@ -448,61 +606,89 @@ void UdpCameraReceiver::processPacket(int camera_index, const uint8_t* data, siz
         }
     }
 
-    FrameBuffer& frame = buffers[header->frame_id];
-    frame.frame_number = header->frame_id;
+    FrameBuffer& frame = buffers[timestamp_ns];
+    frame.timestamp_ns = timestamp_ns;
     frame.last_update = std::chrono::steady_clock::now();
 
-    if (frame.packet_received.size() <= header->packet_number || !frame.packet_received[header->packet_number]) {
-        frame.received_payloads[header->packet_number] = std::vector<uint8_t>(payload, payload + payload_size);
-        if (frame.packet_received.size() <= header->packet_number) {
-            frame.packet_received.resize(header->packet_number + 1, false);
+    if (frame.packet_received.size() <= header.packet_index || !frame.packet_received[header.packet_index]) {
+        frame.received_payloads[header.packet_index] =
+            std::vector<uint8_t>(payload, payload + header.payload_size);
+        if (frame.packet_received.size() <= header.packet_index) {
+            frame.packet_received.resize(header.packet_index + 1, false);
         }
-        frame.packet_received[header->packet_number] = true;
+        frame.packet_received[header.packet_index] = true;
         frame.received_packets++;
         frame.is_jpeg = is_mor;
     }
 
-    bool is_last_packet = false;
-    if (payload_size < 2 || (payload[payload_size - 2] == 0xFF && payload[payload_size - 1] == 0xD9)) {
-        for (int i = payload_size - 2; i >= 0; --i) {
-            if (payload[i] == 0xFF && payload[i+1] == 0xD9) {
-                is_last_packet = true;
-                break;
-            }
-        }
-    }
-    
-    if (is_last_packet) {
-        frame.total_packets = header->packet_number + 1;
+    if (is_last) {
+        frame.total_packets = header.packet_index + 1;
     }
 
     if (frame.total_packets > 0 && frame.received_packets >= frame.total_packets) {
-        std::vector<uint8_t> image_data;
+        std::vector<uint8_t> assembled_data;
         size_t total_size = 0;
         for(const auto& pair : frame.received_payloads) { total_size += pair.second.size(); }
-        image_data.reserve(total_size);
+        assembled_data.reserve(total_size);
 
         bool complete = true;
         for (uint32_t i = 0; i < frame.total_packets; ++i) {
             if (frame.received_payloads.count(i)) {
-                image_data.insert(image_data.end(), frame.received_payloads[i].begin(), frame.received_payloads[i].end());
+                assembled_data.insert(
+                    assembled_data.end(), frame.received_payloads[i].begin(), frame.received_payloads[i].end());
             } else {
                 complete = false;
                 break;
             }
         }
-        
+
         if (complete) {
+            if (is_box) {
+                uint64_t image_timestamp_ns = 0;
+                uint64_t best_difference = std::numeric_limits<uint64_t>::max();
+                auto& image_timestamps = recent_image_timestamps_[camera_index];
+                auto best = image_timestamps.end();
+                for (auto it = image_timestamps.begin(); it != image_timestamps.end(); ++it) {
+                    const uint64_t difference = *it > timestamp_ns ?
+                        *it - timestamp_ns : timestamp_ns - *it;
+                    if (difference < best_difference) {
+                        best_difference = difference;
+                        best = it;
+                    }
+                }
+                const uint64_t tolerance_ns =
+                    static_cast<uint64_t>(bbox_match_tolerance_ms_ * 1000000.0);
+                if (best != image_timestamps.end() && best_difference <= tolerance_ns) {
+                    image_timestamp_ns = *best;
+                    image_timestamps.erase(best);
+                }
+                buffers.erase(timestamp_ns);
+                lock.unlock();
+                if (!image_timestamp_ns) {
+                    RCLCPP_WARN_THROTTLE(
+                        get_logger(), *get_clock(), 2000,
+                        "Cam %d: no MOR timestamp within %.1f ms of BOX timestamp %llu",
+                        camera_index, bbox_match_tolerance_ms_,
+                        static_cast<unsigned long long>(timestamp_ns));
+                    return;
+                }
+                publishBoxes(camera_index, timestamp_ns, image_timestamp_ns, assembled_data);
+                return;
+            }
+
+            auto& image_timestamps = recent_image_timestamps_[camera_index];
+            image_timestamps.push_back(frame.timestamp_ns);
+            while (image_timestamps.size() > 10) image_timestamps.pop_front();
+
             if (enable_sync_) {
                 std::unique_lock<std::mutex> sync_lock(sync_mutex_);
                 SyncFrame sync_frame;
                 sync_frame.camera_index = camera_index;
-                sync_frame.frame_id = frame.frame_number;
+                sync_frame.timestamp_ns = frame.timestamp_ns;
                 sync_frame.is_jpeg = frame.is_jpeg;
-                sync_frame.data = std::move(image_data);
+                sync_frame.data = std::move(assembled_data);
                 sync_frame.received_time = std::chrono::steady_clock::now();
-                // 양자화된 frame_id를 그룹 키로 사용
-                uint32_t group_id = quantizeFrameId(frame.frame_number);
+                const uint64_t group_id = quantizeTimestamp(frame.timestamp_ns);
                 synchronized_frames_[group_id].push_back(std::move(sync_frame));
                 sync_lock.unlock();
                 sync_cv_.notify_one();
@@ -510,15 +696,126 @@ void UdpCameraReceiver::processPacket(int camera_index, const uint8_t* data, siz
                 // 동기화 비활성화 시에도 스레드풀 사용
                 DecodeTask task;
                 task.camera_index = camera_index;
-                task.frame_id = frame.frame_number;
+                task.timestamp_ns = frame.timestamp_ns;
                 task.is_jpeg = frame.is_jpeg;
-                task.data = std::move(image_data);
-                task.stamp = this->now();
+                task.data = std::move(assembled_data);
+                task.stamp = rclcpp::Time(static_cast<int64_t>(frame.timestamp_ns), RCL_ROS_TIME);
                 queueDecodeTask(std::move(task));
             }
         }
-        buffers.erase(header->frame_id);
+        buffers.erase(timestamp_ns);
     }
+}
+
+void UdpCameraReceiver::publishBoxes(
+    int camera_index, uint64_t box_timestamp_ns, uint64_t image_timestamp_ns,
+    const std::vector<uint8_t>& data)
+{
+    std::vector<BoxObject> objects;
+    std::string error;
+    if (!parseBoxPayload(data.data(), data.size(), objects, error)) {
+        RCLCPP_WARN(get_logger(), "Cam %d: dropping BOX frame: %s", camera_index, error.c_str());
+        return;
+    }
+
+    // The UDP page does not name the four fields. MORAI's documented saved 2D format is
+    // x1,y1,x2,y2; keep this assumption visible and verify it with debug_overlay on real data.
+    for (const auto& object : objects) {
+        if (object.bbox_2d_raw[2] - object.bbox_2d_raw[0] < 0.0F ||
+            object.bbox_2d_raw[3] - object.bbox_2d_raw[1] < 0.0F) {
+            RCLCPP_WARN(get_logger(), "Cam %d: dropping BOX frame with negative bbox size", camera_index);
+            return;
+        }
+    }
+
+    vision_msgs::msg::Detection2DArray message;
+    message.header.stamp = rclcpp::Time(
+        static_cast<int64_t>(image_timestamp_ns), RCL_ROS_TIME);
+    message.header.frame_id = cameras_[camera_index].name;
+    message.detections.reserve(objects.size());
+    for (const auto& object : objects) {
+        vision_msgs::msg::Detection2D detection;
+        detection.header = message.header;
+        detection.bbox.center.position.x =
+            (object.bbox_2d_raw[0] + object.bbox_2d_raw[2]) * 0.5;
+        detection.bbox.center.position.y =
+            (object.bbox_2d_raw[1] + object.bbox_2d_raw[3]) * 0.5;
+        detection.bbox.size_x = object.bbox_2d_raw[2] - object.bbox_2d_raw[0];
+        detection.bbox.size_y = object.bbox_2d_raw[3] - object.bbox_2d_raw[1];
+        detection.results.emplace_back();
+        detection.results[0].hypothesis.class_id = boxClassLabel(object.class_tag);
+        detection.results[0].hypothesis.score = 1.0;
+        message.detections.push_back(std::move(detection));
+    }
+    detection_publishers_[camera_index]->publish(message);
+
+    if (debug_mode_) {
+        if (objects.empty()) {
+            RCLCPP_INFO_THROTTLE(
+                get_logger(), *get_clock(), 2000, "Cam %d BOX timestamp=%llu objects=0",
+                camera_index, static_cast<unsigned long long>(box_timestamp_ns));
+        } else {
+            std::ostringstream details;
+            details << std::fixed << std::setprecision(3);
+            for (size_t i = 0; i < objects.size(); ++i) {
+                const auto& box = objects[i].bbox_2d_raw;
+                const size_t tag = i * kBoxObjectSize + 112;
+                details << " #" << i << " tag=" << std::hex << std::setfill('0')
+                        << std::setw(2) << static_cast<unsigned>(data[tag])
+                        << std::setw(2) << static_cast<unsigned>(data[tag + 1])
+                        << std::setw(2) << static_cast<unsigned>(data[tag + 2])
+                        << std::dec << " bbox=[" << box[0] << ' ' << box[1] << ' '
+                        << box[2] << ' ' << box[3] << ']';
+            }
+            RCLCPP_INFO_THROTTLE(
+                get_logger(), *get_clock(), 2000,
+                "Cam %d BOX timestamp=%llu objects=%zu%s",
+                camera_index, static_cast<unsigned long long>(box_timestamp_ns), objects.size(),
+                details.str().c_str());
+        }
+    }
+
+    if (publish_bbox_overlay_) {
+        {
+            std::lock_guard<std::mutex> lock(overlay_mutex_);
+            auto& boxes = overlay_boxes_[camera_index];
+            boxes[image_timestamp_ns] = objects;
+            while (boxes.size() > static_cast<size_t>(max_buffered_frames_)) boxes.erase(boxes.begin());
+        }
+        publishOverlayIfReady(camera_index, image_timestamp_ns);
+    }
+}
+
+void UdpCameraReceiver::publishOverlayIfReady(int camera_index, uint64_t timestamp_ns)
+{
+    cv::Mat image;
+    std::vector<BoxObject> objects;
+    {
+        std::lock_guard<std::mutex> lock(overlay_mutex_);
+        auto image_it = overlay_images_[camera_index].find(timestamp_ns);
+        auto boxes_it = overlay_boxes_[camera_index].find(timestamp_ns);
+        if (image_it == overlay_images_[camera_index].end() ||
+            boxes_it == overlay_boxes_[camera_index].end()) return;
+        image = std::move(image_it->second);
+        objects = std::move(boxes_it->second);
+        overlay_images_[camera_index].erase(image_it);
+        overlay_boxes_[camera_index].erase(boxes_it);
+    }
+
+    for (const auto& object : objects) {
+        cv::rectangle(
+            image, cv::Point2f(object.bbox_2d_raw[0], object.bbox_2d_raw[1]),
+            cv::Point2f(object.bbox_2d_raw[2], object.bbox_2d_raw[3]), cv::Scalar(255, 0, 0), 2);
+        cv::putText(
+            image, boxClassLabel(object.class_tag),
+            cv::Point(static_cast<int>(object.bbox_2d_raw[0]),
+                std::max(12, static_cast<int>(object.bbox_2d_raw[1]))),
+            cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255, 0, 0), 1);
+    }
+    std_msgs::msg::Header header;
+    header.stamp = rclcpp::Time(static_cast<int64_t>(timestamp_ns), RCL_ROS_TIME);
+    header.frame_id = cameras_[camera_index].name;
+    overlay_publishers_[camera_index]->publish(*cv_bridge::CvImage(header, "rgb8", image).toImageMsg());
 }
 
 void UdpCameraReceiver::synchronizerThread()
@@ -533,8 +830,6 @@ void UdpCameraReceiver::synchronizerThread()
             if (!running_) break;
 
             auto now = std::chrono::steady_clock::now();
-            auto stamp = this->now();
-
             for (auto it = synchronized_frames_.begin(); it != synchronized_frames_.end(); ) {
                 // 중복 제거: 각 카메라에서 가장 최신 프레임만 유지
                 std::map<int, size_t> unique_cameras;  // camera_index -> index in it->second
@@ -560,17 +855,20 @@ void UdpCameraReceiver::synchronizerThread()
 
                 if (all_cameras_received) {
                     if (debug_mode_) {
-                        RCLCPP_INFO(this->get_logger(), "Sync: Publishing complete frame group %u", it->first);
+                        RCLCPP_INFO(
+                            this->get_logger(), "Sync: Publishing complete frame group %llu",
+                            static_cast<unsigned long long>(it->first));
                     }
                     // 락 해제 전에 데이터를 move하여 복사
                     for (const auto& pair : unique_cameras) {
                         auto& frame = it->second[pair.second];
                         DecodeTask task;
                         task.camera_index = frame.camera_index;
-                        task.frame_id = frame.frame_id;
+                        task.timestamp_ns = frame.timestamp_ns;
                         task.is_jpeg = frame.is_jpeg;
                         task.data = std::move(frame.data);
-                        task.stamp = stamp;
+                        task.stamp = rclcpp::Time(
+                            static_cast<int64_t>(frame.timestamp_ns), RCL_ROS_TIME);
                         tasks_to_queue.push_back(std::move(task));
                     }
                     it = synchronized_frames_.erase(it);
@@ -583,8 +881,11 @@ void UdpCameraReceiver::synchronizerThread()
                             missing_cams += std::to_string(i) + "(" + cameras_[i].name + ")";
                         }
                     }
-                    RCLCPP_WARN(this->get_logger(), "Sync: Timeout on group %u. Received %zu/%zu. Missing: %s",
-                                it->first, unique_cameras.size(), cameras_.size(), missing_cams.c_str());
+                    RCLCPP_WARN(
+                        this->get_logger(),
+                        "Sync: Timeout on group %llu. Received %zu/%zu. Missing: %s",
+                        static_cast<unsigned long long>(it->first), unique_cameras.size(),
+                        cameras_.size(), missing_cams.c_str());
                     it = synchronized_frames_.erase(it);
                 } else {
                     ++it;
@@ -640,6 +941,14 @@ void UdpCameraReceiver::decodeWorkerThread(int worker_id)
                 continue;
             }
 
+            cv::Mat overlay_image;
+            if (publish_bbox_overlay_) {
+                overlay_image = cv::imdecode(task.data, cv::IMREAD_COLOR);
+                if (!overlay_image.empty()) {
+                    cv::cvtColor(overlay_image, overlay_image, cv::COLOR_BGR2RGB);
+                }
+            }
+
             auto msg = std::make_unique<sensor_msgs::msg::CompressedImage>();
             msg->header.stamp = task.stamp;
             msg->header.frame_id = config.name;
@@ -652,6 +961,17 @@ void UdpCameraReceiver::decodeWorkerThread(int worker_id)
                 info_msg.header.stamp = task.stamp;
                 info_msg.header.frame_id = config.name;
                 camera_info_publishers_[task.camera_index]->publish(info_msg);
+            }
+            if (!overlay_image.empty()) {
+                    {
+                        std::lock_guard<std::mutex> lock(overlay_mutex_);
+                        auto& images = overlay_images_[task.camera_index];
+                        images[task.timestamp_ns] = std::move(overlay_image);
+                        while (images.size() > static_cast<size_t>(max_buffered_frames_)) {
+                            images.erase(images.begin());
+                        }
+                    }
+                    publishOverlayIfReady(task.camera_index, task.timestamp_ns);
             }
             continue;
         }
@@ -720,6 +1040,27 @@ void UdpCameraReceiver::decodeWorkerThread(int worker_id)
             }
         }
 
+        if (publish_bbox_overlay_) {
+            const int type = msg->encoding == "rgb8" ? CV_8UC3 : CV_8UC1;
+            cv::Mat image(static_cast<int>(msg->height), static_cast<int>(msg->width), type,
+                msg->data.data(), msg->step);
+            cv::Mat overlay_image;
+            if (type == CV_8UC3) {
+                overlay_image = image.clone();
+            } else {
+                cv::cvtColor(image, overlay_image, cv::COLOR_GRAY2RGB);
+            }
+            {
+                std::lock_guard<std::mutex> lock(overlay_mutex_);
+                auto& images = overlay_images_[task.camera_index];
+                images[task.timestamp_ns] = std::move(overlay_image);
+                while (images.size() > static_cast<size_t>(max_buffered_frames_)) {
+                    images.erase(images.begin());
+                }
+            }
+            publishOverlayIfReady(task.camera_index, task.timestamp_ns);
+        }
+
         publishers_[task.camera_index]->publish(std::move(msg));
 
         if (publish_camera_info_) {
@@ -730,8 +1071,9 @@ void UdpCameraReceiver::decodeWorkerThread(int worker_id)
         }
 
         if (debug_mode_) {
-            RCLCPP_INFO(this->get_logger(), "Cam %d: Published frame %u (worker %d)",
-                       task.camera_index, task.frame_id, worker_id);
+            RCLCPP_INFO(this->get_logger(), "Cam %d: Published timestamp %llu (worker %d)",
+                       task.camera_index,
+                       static_cast<unsigned long long>(task.timestamp_ns), worker_id);
         }
     }
 }

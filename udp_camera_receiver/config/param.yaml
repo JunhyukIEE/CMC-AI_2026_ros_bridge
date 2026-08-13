@@ -2,6 +2,8 @@
   ros__parameters:
     # 디버그 모드 (패킷 정보 출력)
     debug_mode: false
+    # bbox 위치 검증용 별도 image 토픽 (기본 비활성화)
+    publish_bbox_overlay: true
 
     # 동기화 활성화
     enable_sync: false
@@ -15,6 +17,8 @@
 
     # 프레임 타임아웃 (초) - 이 시간 동안 완성되지 않은 프레임은 버림
     frame_timeout_sec: 1.0
+    # 실제 BOX timestamp가 MOR보다 수 ms 늦어 대응 이미지를 찾는 허용 오차
+    bbox_match_tolerance_ms: 20.0
 
     # 카메라 개수
     num_cameras: 4

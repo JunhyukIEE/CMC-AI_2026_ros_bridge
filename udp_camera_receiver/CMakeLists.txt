@@ -14,6 +14,7 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(vision_msgs REQUIRED)
 find_package(cv_bridge REQUIRED)
 find_package(image_transport REQUIRED)
 find_package(OpenCV REQUIRED)
@@ -37,6 +38,7 @@ add_library(${PROJECT_NAME}_lib
 ament_target_dependencies(${PROJECT_NAME}_lib
   rclcpp
   sensor_msgs
+  vision_msgs
   cv_bridge
   image_transport
 )
@@ -82,8 +84,12 @@ install(DIRECTORY
 )
 
 if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
   find_package(ament_lint_auto REQUIRED)
   ament_lint_auto_find_test_dependencies()
+
+  ament_add_gtest(test_box_parser test/test_box_parser.cpp)
+  target_link_libraries(test_box_parser ${PROJECT_NAME}_lib)
 endif()
 
 ament_package()

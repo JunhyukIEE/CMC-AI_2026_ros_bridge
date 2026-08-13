@@ -5,6 +5,7 @@
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/compressed_image.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
+#include <vision_msgs/msg/detection2_d_array.hpp>
 #include <cv_bridge/cv_bridge.h>
 #include <opencv2/opencv.hpp>
 
@@ -18,6 +19,9 @@
 #include <queue>
 #include <condition_variable>
 #include <functional>
+#include <array>
+#include <cstdint>
+#include <deque>
 
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -30,19 +34,25 @@
 namespace udp_camera_receiver
 {
 
-// MORAI UDP 패킷 헤더 구조체 (실제 구조 - 19 bytes)
-#pragma pack(push, 1)
+// MORAI camera UDP header fields. Wire bytes are decoded explicitly as little-endian.
 struct PacketHeader {
-    char magic[3];              // 매직 넘버 "MOR" or "BOX" (3 bytes)
-    uint8_t version;            // 버전/타입 (1 byte)
-    uint8_t flags;              // 플래그 (1 byte)
-    uint16_t unknown1;          // 알 수 없음 (2 bytes)
-    uint32_t frame_id;          // 프레임 ID - 타임스탬프 (4 bytes)
-    uint32_t packet_number;     // 패킷 번호 0부터 시작 (4 bytes)
-    uint32_t payload_size;      // 이 패킷의 페이로드 크기 (4 bytes)
-    // Total: 19 bytes
+    std::array<char, 3> magic;
+    uint32_t total_second;
+    uint32_t fraction;
+    uint32_t packet_index;
+    uint32_t payload_size;
 };
-#pragma pack(pop)
+
+struct BoxObject {
+    std::array<float, 24> corners_3d;
+    std::array<float, 4> bbox_2d_raw;
+    std::string class_tag;
+};
+
+bool parseBoxPayload(
+    const uint8_t* data, size_t size, std::vector<BoxObject>& objects,
+    std::string& error);
+std::string boxClassLabel(const std::string& raw_tag);
 
 // 카메라 설정 구조체
 struct CameraConfig {
@@ -59,7 +69,7 @@ struct CameraConfig {
 
 // 프레임 버퍼 구조체
 struct FrameBuffer {
-    uint32_t frame_number;
+    uint64_t timestamp_ns;
     uint32_t total_packets;
     uint32_t received_packets;
     std::map<uint32_t, std::vector<uint8_t>> received_payloads; // 패킷 번호 -> 페이로드
@@ -67,13 +77,13 @@ struct FrameBuffer {
     std::chrono::steady_clock::time_point last_update;
     bool is_jpeg;  // JPEG 압축 여부
 
-    FrameBuffer() : frame_number(0), total_packets(0), received_packets(0), is_jpeg(false) {}
+    FrameBuffer() : timestamp_ns(0), total_packets(0), received_packets(0), is_jpeg(false) {}
 };
 
 // 디코딩 작업 구조체
 struct DecodeTask {
     int camera_index;
-    uint32_t frame_id;
+    uint64_t timestamp_ns;
     bool is_jpeg;
     std::vector<uint8_t> data;
     rclcpp::Time stamp;
@@ -90,6 +100,10 @@ private:
     void initializeCameras();
     void receiveThread(int camera_index);
     void processPacket(int camera_index, const uint8_t* data, size_t length);
+    void publishBoxes(
+        int camera_index, uint64_t box_timestamp_ns, uint64_t image_timestamp_ns,
+        const std::vector<uint8_t>& data);
+    void publishOverlayIfReady(int camera_index, uint64_t timestamp_ns);
     void synchronizerThread();
     void decodeWorkerThread(int worker_id);
     void initializeNvJpeg();
@@ -110,6 +124,9 @@ private:
         compressed_publishers_;
     std::vector<rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr> camera_info_publishers_;
     std::vector<sensor_msgs::msg::CameraInfo> camera_info_msgs_;
+    std::vector<rclcpp::Publisher<vision_msgs::msg::Detection2DArray>::SharedPtr>
+        detection_publishers_;
+    std::vector<rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr> overlay_publishers_;
 
     // 수신 스레드
     std::vector<std::shared_ptr<std::thread>> receive_threads_;
@@ -117,18 +134,20 @@ private:
     std::atomic<bool> running_;
 
     // 프레임 버퍼
-    std::vector<std::map<uint32_t, FrameBuffer>> frame_buffers_;
+    std::vector<std::map<uint64_t, FrameBuffer>> frame_buffers_;
+    std::vector<std::map<uint64_t, FrameBuffer>> box_buffers_;
+    std::vector<std::deque<uint64_t>> recent_image_timestamps_;
     std::vector<std::unique_ptr<std::mutex>> buffer_mutexes_;
 
     // 동기화 버퍼
     struct SyncFrame {
         int camera_index;
-        uint32_t frame_id;
+        uint64_t timestamp_ns;
         bool is_jpeg;
         std::vector<uint8_t> data;
         std::chrono::steady_clock::time_point received_time;
     };
-    std::map<uint32_t, std::vector<SyncFrame>> synchronized_frames_;
+    std::map<uint64_t, std::vector<SyncFrame>> synchronized_frames_;
     std::mutex sync_mutex_;
     std::condition_variable sync_cv_;
 
@@ -147,18 +166,23 @@ private:
 
     // 파라미터
     bool debug_mode_;
+    bool publish_bbox_overlay_;
     int max_buffered_frames_;
     double frame_timeout_sec_;
+    double bbox_match_tolerance_ms_;
     bool publish_camera_info_;
     double default_hfov_deg_;
     bool enable_sync_;
     double sync_timeout_sec_;
-    double sync_window_ms_;  // 동기화 윈도우 (밀리초) - 이 범위 내의 frame_id를 같은 프레임으로 취급
+    double sync_window_ms_;
 
-    // frame_id를 윈도우로 양자화
-    uint32_t quantizeFrameId(uint32_t frame_id) const {
-        uint32_t window_ns = static_cast<uint32_t>(sync_window_ms_ * 1000000.0);
-        return (frame_id / window_ns) * window_ns;
+    std::vector<std::map<uint64_t, cv::Mat>> overlay_images_;
+    std::vector<std::map<uint64_t, std::vector<BoxObject>>> overlay_boxes_;
+    std::mutex overlay_mutex_;
+
+    uint64_t quantizeTimestamp(uint64_t timestamp_ns) const {
+        const uint64_t window_ns = static_cast<uint64_t>(sync_window_ms_ * 1000000.0);
+        return window_ns ? (timestamp_ns / window_ns) * window_ns : timestamp_ns;
     }
 };
 
