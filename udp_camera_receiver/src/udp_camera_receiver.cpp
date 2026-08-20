@@ -16,6 +16,7 @@ namespace
 constexpr size_t kHeaderSize = 19;
 constexpr size_t kTailSize = 2;
 constexpr size_t kBoxObjectSize = 115;
+constexpr int kMaxCameraConfigIndex = 6;
 
 uint32_t readLe32(const uint8_t* data)
 {
@@ -218,29 +219,26 @@ void UdpCameraReceiver::loadParameters()
 
     RCLCPP_INFO(this->get_logger(), "Sync window: %.1f ms", sync_window_ms_);
 
-    // 카메라 개수
-    this->declare_parameter<int>("num_cameras", 1);
-    int num_cameras = this->get_parameter("num_cameras").as_int();
+    // name이 설정된 camera_N만 활성 카메라로 로드한다.
+    for (int config_index = 0; config_index <= kMaxCameraConfigIndex; ++config_index) {
+        std::string prefix = "camera_" + std::to_string(config_index) + ".";
+        this->declare_parameter<std::string>(prefix + "name", "");
+        const std::string name = this->get_parameter(prefix + "name").as_string();
+        if (name.empty()) continue;
 
-    RCLCPP_INFO(this->get_logger(), "Number of cameras: %d", num_cameras);
-
-    // 각 카메라 설정 로드
-    for (int i = 0; i < num_cameras; ++i) {
         CameraConfig config;
-
-        std::string prefix = "camera_" + std::to_string(i) + ".";
-
-        this->declare_parameter<std::string>(prefix + "name", "camera_" + std::to_string(i));
         this->declare_parameter<std::string>(prefix + "ip", "192.168.0.37");
-        this->declare_parameter<int>(prefix + "port", 9001 + i);
-        this->declare_parameter<std::string>(prefix + "topic_name", "/camera_" + std::to_string(i) + "/image_raw");
+        this->declare_parameter<int>(prefix + "port", 9001 + config_index);
+        this->declare_parameter<std::string>(
+            prefix + "topic_name",
+            "/camera_" + std::to_string(config_index) + "/image_raw");
         this->declare_parameter<int>(prefix + "width", 640);
         this->declare_parameter<int>(prefix + "height", 480);
         this->declare_parameter<int>(prefix + "channels", 3);
         this->declare_parameter<double>(prefix + "hfov_deg", default_hfov_deg_);
         this->declare_parameter<bool>(prefix + "compressed", false);
 
-        config.name = this->get_parameter(prefix + "name").as_string();
+        config.name = name;
         config.ip = this->get_parameter(prefix + "ip").as_string();
         config.port = this->get_parameter(prefix + "port").as_int();
         config.topic_name = this->get_parameter(prefix + "topic_name").as_string();
@@ -251,12 +249,16 @@ void UdpCameraReceiver::loadParameters()
         config.compressed = this->get_parameter(prefix + "compressed").as_bool();
         config.topic_name = imageTopic(config.topic_name, config.compressed);
 
+        const size_t slot = cameras_.size();
         cameras_.push_back(config);
 
-        RCLCPP_INFO(this->get_logger(), "Camera %d: %s - %s:%d -> %s (%dx%d)",
-                    i, config.name.c_str(), config.ip.c_str(), config.port,
-                    config.topic_name.c_str(), config.width, config.height);
+        RCLCPP_INFO(
+            this->get_logger(),
+            "Camera slot %zu (camera_%d): %s - %s:%d -> %s (%dx%d)",
+            slot, config_index, config.name.c_str(), config.ip.c_str(), config.port,
+            config.topic_name.c_str(), config.width, config.height);
     }
+    RCLCPP_INFO(this->get_logger(), "Number of cameras: %zu", cameras_.size());
 }
 
 void UdpCameraReceiver::initializeCameras()

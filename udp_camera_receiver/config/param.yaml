@@ -20,9 +20,7 @@
     # 실제 BOX timestamp가 MOR보다 수 ms 늦어 대응 이미지를 찾는 허용 오차
     bbox_match_tolerance_ms: 20.0
 
-    # 카메라 개수
-    num_cameras: 4
-
+    # 사용할 camera_N 블록만 주석 해제
     camera_0:
       name: "front_camera/camera_optical_link"
       ip: "192.168.0.37"
