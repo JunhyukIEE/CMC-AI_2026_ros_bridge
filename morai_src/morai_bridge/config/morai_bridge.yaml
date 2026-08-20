@@ -8,6 +8,12 @@ morai_sensor_receiver_node:
     # Set to 0.0 to publish the original MORAI orientation without correction.
     imu_yaw_offset_deg: -1.347045
 
+morai_sender_node:
+  ros__parameters:
+    simulator_ip: "192.168.0.27"
+    cmd_udp_port: 9091
+    max_brake_command: 0.63
+
 morai_traffic_light_sender_node:
   ros__parameters:
     simulator_ip: "192.168.0.27"

@@ -59,6 +59,7 @@ def generate_launch_description():
                 package="morai_bridge",
                 executable="morai_sender_node",
                 output="screen",
+                parameters=[params],
             ),
             Node(
                 package="morai_bridge",

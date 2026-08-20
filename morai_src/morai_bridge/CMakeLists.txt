@@ -13,6 +13,7 @@ find_package(morai_msgs REQUIRED)
 find_package(autoware_control_msgs REQUIRED)
 find_package(autoware_vehicle_msgs REQUIRED)
 find_package(tier4_system_msgs REQUIRED)
+find_package(tier4_vehicle_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
@@ -47,6 +48,7 @@ ament_target_dependencies(
   "rclcpp"
   "autoware_control_msgs"
   "autoware_vehicle_msgs"
+  "tier4_vehicle_msgs"
 )
 
 # Traffic-light sender node
