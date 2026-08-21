@@ -1,7 +1,6 @@
 #include "rclcpp/rclcpp.hpp"
 #include "autoware_control_msgs/msg/control.hpp"
 #include "autoware_vehicle_msgs/msg/gear_command.hpp"
-#include "tier4_vehicle_msgs/msg/actuation_command_stamped.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -21,6 +20,16 @@ constexpr float MAX_STEERING_ANGLE_RAD = 40.0f * 3.14159265358979323846f / 180.0
 constexpr float clamp_brake(float brake, float maximum)
 {
     return std::clamp(brake, 0.0f, maximum);
+}
+
+constexpr float to_morai_accel(float acceleration)
+{
+    return std::clamp(acceleration, 0.0f, 1.0f);
+}
+
+constexpr float to_morai_brake(float acceleration, float maximum)
+{
+    return clamp_brake(-acceleration, maximum);
 }
 
 constexpr float to_morai_steering(float steering_tire_angle)
@@ -49,6 +58,8 @@ static_assert(to_morai_steering(-MAX_STEERING_ANGLE_RAD) == -1.0f);
 static_assert(clamp_brake(0.8f, 0.63f) == 0.63f);
 static_assert(clamp_brake(0.63f, 0.63f) == 0.63f);
 static_assert(clamp_brake(-0.1f, 0.63f) == 0.0f);
+static_assert(to_morai_accel(0.5f) == 0.5f);
+static_assert(to_morai_brake(-0.8f, 0.63f) == 0.63f);
 
 // MORAI CtrlCmd UDP 패킷 구조체
 #pragma pack(push, 1)
@@ -101,10 +112,6 @@ public:
         subscription_ = this->create_subscription<autoware_control_msgs::msg::Control>(
             "/control/command/control_cmd", 1,
             std::bind(&MoraiSenderNode::ctrl_cmd_callback, this, _1));
-        actuation_subscription_ =
-            this->create_subscription<tier4_vehicle_msgs::msg::ActuationCommandStamped>(
-                "/control/command/actuation_cmd", 1,
-                std::bind(&MoraiSenderNode::actuation_cmd_callback, this, _1));
         gear_subscription_ =
             this->create_subscription<autoware_vehicle_msgs::msg::GearCommand>(
                 "/control/command/gear_cmd", 10,
@@ -159,21 +166,19 @@ private:
 
     void ctrl_cmd_callback(const autoware_control_msgs::msg::Control::SharedPtr msg)
     {
-        current_steering_ = to_morai_steering(msg->lateral.steering_tire_angle);
-    }
-
-    void actuation_cmd_callback(
-        const tier4_vehicle_msgs::msg::ActuationCommandStamped::SharedPtr msg)
-    {
         if (send_sockfd_ < 0) {
             RCLCPP_WARN(this->get_logger(), "UDP socket is not ready.");
             return;
         }
 
-        const float accel = static_cast<float>(msg->actuation.accel_cmd);
-        const float brake = static_cast<float>(msg->actuation.brake_cmd);
-        if (!std::isfinite(accel) || !std::isfinite(brake)) {
-            RCLCPP_WARN(this->get_logger(), "Ignoring non-finite actuation command.");
+        const bool use_acceleration = msg->longitudinal.is_defined_acceleration;
+        const float acceleration = msg->longitudinal.acceleration;
+        const float velocity = msg->longitudinal.velocity;
+        const float steering = msg->lateral.steering_tire_angle;
+        if (!std::isfinite(steering) ||
+            (use_acceleration && !std::isfinite(acceleration)) ||
+            (!use_acceleration && !std::isfinite(velocity))) {
+            RCLCPP_WARN(this->get_logger(), "Ignoring non-finite control command.");
             return;
         }
 
@@ -192,12 +197,14 @@ private:
         CtrlCommandPacket cmd_packet;
         cmd_packet.mode = 2;       // 2: AutoMode
         cmd_packet.gear = current_gear_;
-        cmd_packet.cmd_type = 1;   // Throttle/brake pedal control
-        cmd_packet.velocity = 0.0f;
+        cmd_packet.cmd_type = use_acceleration ? 1 : 2;
+        cmd_packet.velocity = velocity * 3.6f;
         cmd_packet.acceleration = 0.0f;
-        cmd_packet.accel = std::clamp(accel, 0.0f, 1.0f);
-        cmd_packet.brake = clamp_brake(brake, max_brake_command_);
-        cmd_packet.steering = current_steering_;
+        cmd_packet.accel = use_acceleration ?
+            to_morai_accel(acceleration) : 0.0f;
+        cmd_packet.brake = use_acceleration ?
+            to_morai_brake(acceleration, max_brake_command_) : 0.0f;
+        cmd_packet.steering = to_morai_steering(steering);
 
         // 3. 전체 UDP 패킷 조립 (헤더 + 본문 + 테일)
         std::vector<unsigned char> packet_data;
@@ -219,8 +226,6 @@ private:
 
     // ROS 관련 멤버
     rclcpp::Subscription<autoware_control_msgs::msg::Control>::SharedPtr subscription_;
-    rclcpp::Subscription<tier4_vehicle_msgs::msg::ActuationCommandStamped>::SharedPtr
-        actuation_subscription_;
     rclcpp::Subscription<autoware_vehicle_msgs::msg::GearCommand>::SharedPtr
         gear_subscription_;
 
@@ -230,7 +235,6 @@ private:
     std::string simulator_ip_;
     int cmd_udp_port_;
     float max_brake_command_ = 0.63f;
-    float current_steering_ = 0.0f;
     uint8_t current_gear_ = 4;
 };
 
