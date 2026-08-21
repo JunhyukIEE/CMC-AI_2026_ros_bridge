@@ -3,17 +3,17 @@
     # 디버그 모드 (패킷 정보 출력)
     debug_mode: false
     # bbox 위치 검증용 별도 image 토픽 (기본 비활성화)
-    publish_bbox_overlay: true
+    publish_bbox_overlay: false
 
     # 동기화 활성화
     enable_sync: false
     # 동기화 타임아웃 (초) - 이 시간 안에 모든 카메라 데이터가 도착하지 않으면 해당 프레임 ID 폐기
-    sync_timeout_sec: 0.1
+    sync_timeout_sec: 0.08
     # 동기화 윈도우 (밀리초) - 이 범위 내의 frame_id를 같은 프레임으로 취급
-    sync_window_ms: 100.0
+    sync_window_ms: 50.0
 
     # 최대 버퍼링할 프레임 수 (메모리 관리)
-    max_buffered_frames: 5
+    max_buffered_frames: 2
 
     # 프레임 타임아웃 (초) - 이 시간 동안 완성되지 않은 프레임은 버림
     frame_timeout_sec: 1.0

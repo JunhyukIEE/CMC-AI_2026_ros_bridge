@@ -7,6 +7,7 @@
 #include <limits>
 #include <iomanip>
 #include <sstream>
+#include <stdexcept>
 
 namespace udp_camera_receiver
 {
@@ -216,6 +217,10 @@ void UdpCameraReceiver::loadParameters()
     this->get_parameter("enable_sync", enable_sync_);
     this->get_parameter("sync_timeout_sec", sync_timeout_sec_);
     this->get_parameter("sync_window_ms", sync_window_ms_);
+
+    if (max_buffered_frames_ < 1) {
+        throw std::invalid_argument("max_buffered_frames must be at least 1");
+    }
 
     RCLCPP_INFO(this->get_logger(), "Sync window: %.1f ms", sync_window_ms_);
 
@@ -907,6 +912,9 @@ void UdpCameraReceiver::queueDecodeTask(DecodeTask&& task)
 {
     {
         std::lock_guard<std::mutex> lock(decode_mutex_);
+        while (decode_queue_.size() >= static_cast<size_t>(max_buffered_frames_)) {
+            decode_queue_.pop();
+        }
         decode_queue_.push(std::move(task));
     }
     decode_cv_.notify_one();
