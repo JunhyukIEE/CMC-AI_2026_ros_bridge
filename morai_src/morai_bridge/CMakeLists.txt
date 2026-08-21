@@ -82,6 +82,12 @@ install(PROGRAMS
   RENAME traffic_light_map_ui_node
 )
 
+install(PROGRAMS
+  scripts/brake_test.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME brake_test
+)
+
 install(DIRECTORY launch config
   DESTINATION share/${PROJECT_NAME}
 )
