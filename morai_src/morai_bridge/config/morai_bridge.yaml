@@ -1,6 +1,11 @@
+morai_bridge_launch:
+  ros__parameters:
+    # MORAI rear-axle origin to Autoware ground-projected base_link offset.
+    wheel_radius: 0.36
+
 morai_sensor_receiver_node:
   ros__parameters:
-    slam_mode: true
+    slam_mode: false
     map_frame: map
     lidar_frame: velodyne_top
     gnss_frame: gnss_link
