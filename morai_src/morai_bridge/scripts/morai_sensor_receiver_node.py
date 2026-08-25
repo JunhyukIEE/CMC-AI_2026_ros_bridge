@@ -6,7 +6,7 @@ import struct
 import time
 
 import rclpy
-from morai_msgs.msg import CollisionData, ObjectStatus, ObjectStatusList
+from morai_msgs.msg import CollisionData, ObjectStatus
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Imu, LaserScan, NavSatFix, NavSatStatus
@@ -16,13 +16,10 @@ COLLISION = struct.Struct("<15si3iii" + "hh6f" * 5 + "2s")
 IMU = struct.Struct("<9si3iii10d2s")
 LIDAR_HEADER = struct.Struct("<9si3f")
 LIDAR_POINT = struct.Struct("<Hb")
-OBJECT_HEADER = struct.Struct("<14si3iii")
-OBJECT_RECORD = struct.Struct("<hh3ff3f3f3f3f38s")
 
 assert COLLISION.size == 181
 assert IMU.size == 115
 assert LIDAR_HEADER.size + LIDAR_POINT.size * 360 + 2 == 1107
-assert OBJECT_HEADER.size + OBJECT_RECORD.size * 20 + 2 == 2160
 
 
 def nmea_coordinate(value, direction):
@@ -52,7 +49,6 @@ class MoraiSensorReceiver(Node):
         self.declare_parameter("lidar_port", 19005)
         self.declare_parameter("gnss_port", 9006)
         self.declare_parameter("imu_port", 9007)
-        self.declare_parameter("object_port", 1025)
         self.declare_parameter("map_frame", "map")
         self.declare_parameter("lidar_frame", "lidar")
         self.declare_parameter("gnss_frame", "base_link")
@@ -73,7 +69,6 @@ class MoraiSensorReceiver(Node):
             "lidar": self.get_parameter("lidar_port").value,
             "gnss": self.get_parameter("gnss_port").value,
             "imu": self.get_parameter("imu_port").value,
-            "object": self.get_parameter("object_port").value,
         }
 
         self.sockets = {
@@ -84,7 +79,6 @@ class MoraiSensorReceiver(Node):
             "lidar": self._publish_lidar,
             "gnss": self._publish_gnss,
             "imu": self._publish_imu,
-            "object": self._publish_object,
         }
 
         self.collision_pub = self.create_publisher(CollisionData, "/CollisionData", 10)
@@ -93,9 +87,6 @@ class MoraiSensorReceiver(Node):
         )
         self.gnss_pub = self.create_publisher(NavSatFix, "/gps/fix", 10)
         self.imu_pub = self.create_publisher(Imu, "/imu/data", 10)
-        self.object_pub = self.create_publisher(
-            ObjectStatusList, "/Object_topic", qos_profile_sensor_data
-        )
         self.imu_time_offset_ns = None
         self.last_imu_packet_stamp_ns = None
         self.imu_rate_started = time.monotonic()
@@ -106,14 +97,13 @@ class MoraiSensorReceiver(Node):
         self.imu_rate_timer = self.create_timer(10.0, self._report_imu_rate)
 
         self.get_logger().info(
-            "Listening on %s: collision=%d lidar=%d gnss=%d imu=%d object=%d"
+            "Listening on %s: collision=%d lidar=%d gnss=%d imu=%d"
             % (
                 bind_ip,
                 ports["collision"],
                 ports["lidar"],
                 ports["gnss"],
                 ports["imu"],
-                ports["object"],
             )
         )
         self.get_logger().info(
@@ -198,51 +188,6 @@ class MoraiSensorReceiver(Node):
             msg.ranges.append(distance if 0.0 < distance < msg.range_max else math.inf)
             msg.intensities.append(float(intensity))
         self.lidar_pub.publish(msg)
-
-    def _publish_object(self, data):
-        expected_size = OBJECT_HEADER.size + OBJECT_RECORD.size * 20 + 2
-        if len(data) != expected_size:
-            raise ValueError(f"expected {expected_size} bytes, got {len(data)}")
-        header = OBJECT_HEADER.unpack_from(data)
-        if header[0] != b"#MoraiObjInfo$" or data[-2:] != b"\r\n":
-            raise ValueError("bad header or tail")
-        if header[1] != 8 + OBJECT_RECORD.size * 20:
-            raise ValueError(f"unexpected data length {header[1]}")
-
-        msg = ObjectStatusList()
-        sec, nanosec = header[5:7]
-        if sec > 0 and 0 <= nanosec < 1_000_000_000:
-            msg.header.stamp.sec = sec
-            msg.header.stamp.nanosec = nanosec
-        else:
-            msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = self.map_frame
-
-        count = min(max(header[2], 0), 20)
-        for index in range(count):
-            values = OBJECT_RECORD.unpack_from(
-                data, OBJECT_HEADER.size + index * OBJECT_RECORD.size
-            )
-            obj = ObjectStatus()
-            obj.unique_id, obj.type = values[:2]
-            obj.position.x, obj.position.y, obj.position.z = values[2:5]
-            obj.heading = values[5]
-            obj.size.x, obj.size.y, obj.size.z = values[6:9]
-            obj.velocity.x, obj.velocity.y, obj.velocity.z = values[12:15]
-            obj.acceleration.x, obj.acceleration.y, obj.acceleration.z = values[15:18]
-
-            if obj.type == 1:
-                obj.name = values[18].split(b"\0", 1)[0].decode("ascii")
-                msg.npc_list.append(obj)
-            elif obj.type == 0:
-                msg.pedestrian_list.append(obj)
-            elif obj.type == 2:
-                msg.obstacle_list.append(obj)
-
-        msg.num_of_npcs = len(msg.npc_list)
-        msg.num_of_pedestrian = len(msg.pedestrian_list)
-        msg.num_of_obstacle = len(msg.obstacle_list)
-        self.object_pub.publish(msg)
 
     def _publish_gnss(self, data):
         text = data.rstrip(b"\x00").decode("ascii", errors="strict").strip()

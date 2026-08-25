@@ -18,16 +18,3 @@ morai_sender_node:
     simulator_ip: "192.168.0.27"
     cmd_udp_port: 9091
     max_brake_command: 0.63
-
-morai_traffic_light_sender_node:
-  ros__parameters:
-    simulator_ip: "192.168.0.27"
-    traffic_light_udp_port: 4000
-    input_topic: "/SetTrafficLight"
-
-traffic_light_map_ui:
-  ros__parameters:
-    map_path: "~/autoware_map/K_city/K_city_26.osm"
-    host: "127.0.0.1"
-    port: 18080
-    output_topic: "/SetTrafficLight"

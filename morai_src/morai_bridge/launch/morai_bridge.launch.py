@@ -68,18 +68,6 @@ def generate_launch_description():
                 output="screen",
                 parameters=[params],
             ),
-            Node(
-                package="morai_bridge",
-                executable="morai_traffic_light_sender_node",
-                output="screen",
-                parameters=[params],
-            ),
-            Node(
-                package="morai_bridge",
-                executable="traffic_light_map_ui_node",
-                output="screen",
-                parameters=[params],
-            ),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(camera_launch),
             ),
