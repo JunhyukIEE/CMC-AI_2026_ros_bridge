@@ -95,5 +95,5 @@
       width: 640
       height: 480
       channels: 3
-      hfov_deg: 60.0
+      hfov_deg: 45.0
       compressed: true
