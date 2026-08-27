@@ -171,13 +171,9 @@ private:
             return;
         }
 
-        const bool use_acceleration = msg->longitudinal.is_defined_acceleration;
         const float acceleration = msg->longitudinal.acceleration;
-        const float velocity = msg->longitudinal.velocity;
         const float steering = msg->lateral.steering_tire_angle;
-        if (!std::isfinite(steering) ||
-            (use_acceleration && !std::isfinite(acceleration)) ||
-            (!use_acceleration && !std::isfinite(velocity))) {
+        if (!std::isfinite(steering) || !std::isfinite(acceleration)) {
             RCLCPP_WARN(this->get_logger(), "Ignoring non-finite control command.");
             return;
         }
@@ -197,13 +193,12 @@ private:
         CtrlCommandPacket cmd_packet;
         cmd_packet.mode = 2;       // 2: AutoMode
         cmd_packet.gear = current_gear_;
-        cmd_packet.cmd_type = use_acceleration ? 1 : 2;
-        cmd_packet.velocity = velocity * 3.6f;
+        // Velocity mode applies MORAI's own brake and bypasses max_brake_command_.
+        cmd_packet.cmd_type = 1;
+        cmd_packet.velocity = 0.0f;
         cmd_packet.acceleration = 0.0f;
-        cmd_packet.accel = use_acceleration ?
-            to_morai_accel(acceleration) : 0.0f;
-        cmd_packet.brake = use_acceleration ?
-            to_morai_brake(acceleration, max_brake_command_) : 0.0f;
+        cmd_packet.accel = to_morai_accel(acceleration);
+        cmd_packet.brake = to_morai_brake(acceleration, max_brake_command_);
         cmd_packet.steering = to_morai_steering(steering);
 
         // 3. 전체 UDP 패킷 조립 (헤더 + 본문 + 테일)
