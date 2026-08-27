@@ -73,7 +73,7 @@ def generate_launch_description():
             ),
             static_tf(
                 "base_link", "velodyne_top",
-                (1.6, 0.0, 1.63 + wheel_radius), (0.0, 1.0, 0.0),
+                (1.6, 0.0, 1.63 + wheel_radius), (0.0, 0.0, 0.0),
             ),
             static_tf(
                 "base_link", "gnss_link",
