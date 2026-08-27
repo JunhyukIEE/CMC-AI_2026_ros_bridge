@@ -198,10 +198,6 @@ class MoraiSensorReceiver(Node):
                 longitude = nmea_coordinate(fields[4], fields[5])
                 self.last_altitude = float(fields[9])
                 has_fix = fields[6] not in ("", "0")
-            elif fields[0] == "$GPRMC" and len(fields) > 6:
-                latitude = nmea_coordinate(fields[3], fields[4])
-                longitude = nmea_coordinate(fields[5], fields[6])
-                has_fix = fields[2] == "A"
             else:
                 continue
 
