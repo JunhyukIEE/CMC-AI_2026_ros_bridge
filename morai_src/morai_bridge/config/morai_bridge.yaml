@@ -17,4 +17,12 @@ morai_sender_node:
   ros__parameters:
     simulator_ip: "192.168.0.27"
     cmd_udp_port: 9091
+    speed_kp: 1.0
+    speed_ki: 0.1
+    speed_kd: 0.001
+    integral_limit: 5.0
+    velocity_deadband_mps: 0.1
+    max_throttle_command: 1.0
     max_brake_command: 0.63
+    standstill_brake_command: 0.1
+    velocity_timeout_sec: 0.2
