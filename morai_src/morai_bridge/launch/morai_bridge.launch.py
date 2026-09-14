@@ -91,22 +91,22 @@ def generate_launch_description():
                 "front_camera/camera_link", "front_camera/camera_optical_link",
                 (0.0, 0.0, 0.0), (-90.0, 0.0, -90.0),
             ),
-            static_tf(
-                "base_link", "left_camera/camera_link",
-                (1.15, 0.65, 1.2 + wheel_radius), (0.0, 10.0, 70.0),
-            ),
-            static_tf(
-                "left_camera/camera_link", "left_camera/camera_optical_link",
-                (0.0, 0.0, 0.0), (-90.0, 0.0, -90.0),
-            ),
-            static_tf(
-                "base_link", "right_camera/camera_link",
-                (1.15, -0.65, 1.2 + wheel_radius), (0.0, 10.0, 290.0),
-            ),
-            static_tf(
-                "right_camera/camera_link", "right_camera/camera_optical_link",
-                (0.0, 0.0, 0.0), (-90.0, 0.0, -90.0),
-            ),
+            # static_tf(
+            #     "base_link", "left_camera/camera_link",
+            #     (1.15, 0.65, 1.2 + wheel_radius), (0.0, 10.0, 70.0),
+            # ),
+            # static_tf(
+            #     "left_camera/camera_link", "left_camera/camera_optical_link",
+            #     (0.0, 0.0, 0.0), (-90.0, 0.0, -90.0),
+            # ),
+            # static_tf(
+            #     "base_link", "right_camera/camera_link",
+            #     (1.15, -0.65, 1.2 + wheel_radius), (0.0, 10.0, 290.0),
+            # ),
+            # static_tf(
+            #     "right_camera/camera_link", "right_camera/camera_optical_link",
+            #     (0.0, 0.0, 0.0), (-90.0, 0.0, -90.0),
+            # ),
             # static_tf(
             #     "base_link", "rear_camera/camera_link",
             #     (-0.7, 0.0, 1.2 + wheel_radius), (0.0, 2.0, 180.0),

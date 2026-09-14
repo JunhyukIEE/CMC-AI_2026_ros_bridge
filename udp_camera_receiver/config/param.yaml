@@ -20,7 +20,6 @@
     # 실제 BOX timestamp가 MOR보다 수 ms 늦어 대응 이미지를 찾는 허용 오차
     bbox_match_tolerance_ms: 20.0
 
-    # 사용할 camera_N 블록만 주석 해제
     camera_0:
       name: "front_camera/camera_optical_link"
       ip: "192.168.0.37"
@@ -32,27 +31,27 @@
       hfov_deg: 90.0
       compressed: false
 
-    camera_1:
-      name: "left_camera/camera_optical_link"
-      ip: "192.168.0.37"
-      port: 9002
-      topic_name: "/sensing/camera/camera1/image_raw"
-      width: 640
-      height: 480
-      channels: 3
-      hfov_deg: 130.0
-      compressed: false
+    # camera_1:
+    #   name: "left_camera/camera_optical_link"
+    #   ip: "192.168.0.37"
+    #   port: 9002
+    #   topic_name: "/sensing/camera/camera1/image_raw"
+    #   width: 640
+    #   height: 480
+    #   channels: 3
+    #   hfov_deg: 130.0
+    #   compressed: false
 
-    camera_2:
-      name: "right_camera/camera_optical_link"
-      ip: "192.168.0.37"
-      port: 9003
-      topic_name: "/sensing/camera/camera2/image_raw"
-      width: 640
-      height: 480
-      channels: 3
-      hfov_deg: 130.0
-      compressed: false
+    # camera_2:
+    #   name: "right_camera/camera_optical_link"
+    #   ip: "192.168.0.37"
+    #   port: 9003
+    #   topic_name: "/sensing/camera/camera2/image_raw"
+    #   width: 640
+    #   height: 480
+    #   channels: 3
+    #   hfov_deg: 130.0
+    #   compressed: false
 
     # camera_3:
     #   name: "rear_camera/camera_optical_link"
@@ -95,5 +94,5 @@
       width: 640
       height: 480
       channels: 3
-      hfov_deg: 45.0
+      hfov_deg: 60.0
       compressed: true
