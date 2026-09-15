@@ -90,6 +90,12 @@ if(BUILD_TESTING)
 
   ament_add_gtest(test_box_parser test/test_box_parser.cpp)
   target_link_libraries(test_box_parser ${PROJECT_NAME}_lib)
+
+  ament_add_gtest(test_camera_timestamp test/test_camera_timestamp.cpp)
+  target_link_libraries(test_camera_timestamp ${PROJECT_NAME}_lib)
+  # Separate ROS graph from a running simulator/Autoware; no camera UDP sockets used.
+  set_tests_properties(test_camera_timestamp PROPERTIES
+    ENVIRONMENT "ROS_DOMAIN_ID=173;ROS_LOCALHOST_ONLY=1")
 endif()
 
 ament_package()

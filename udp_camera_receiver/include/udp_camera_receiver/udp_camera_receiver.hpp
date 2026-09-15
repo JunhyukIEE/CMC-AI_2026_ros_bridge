@@ -22,6 +22,7 @@
 #include <array>
 #include <cstdint>
 #include <deque>
+#include <utility>
 
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -70,6 +71,7 @@ struct CameraConfig {
 // 프레임 버퍼 구조체
 struct FrameBuffer {
     uint64_t timestamp_ns;
+    rclcpp::Time stamp;  // ROS output stamp, fixed on the first received packet.
     uint32_t total_packets;
     uint32_t received_packets;
     std::map<uint32_t, std::vector<uint8_t>> received_payloads; // 패킷 번호 -> 페이로드
@@ -96,13 +98,16 @@ public:
     virtual ~UdpCameraReceiver();
 
 private:
+    friend class UdpCameraReceiverTimestampTest;
     void loadParameters();
     void initializeCameras();
     void receiveThread(int camera_index);
-    void processPacket(int camera_index, const uint8_t* data, size_t length);
+    void processPacket(
+        int camera_index, const uint8_t* data, size_t length,
+        const rclcpp::Time& receive_stamp);
     void publishBoxes(
         int camera_index, uint64_t box_timestamp_ns, uint64_t image_timestamp_ns,
-        const std::vector<uint8_t>& data);
+        const std::vector<uint8_t>& data, const rclcpp::Time& image_stamp);
     void publishOverlayIfReady(int camera_index, uint64_t timestamp_ns);
     void synchronizerThread();
     void decodeWorkerThread(int worker_id);
@@ -136,13 +141,15 @@ private:
     // 프레임 버퍼
     std::vector<std::map<uint64_t, FrameBuffer>> frame_buffers_;
     std::vector<std::map<uint64_t, FrameBuffer>> box_buffers_;
-    std::vector<std::deque<uint64_t>> recent_image_timestamps_;
+    // MORAI timestamp for BOX matching + the corresponding image's ROS stamp.
+    std::vector<std::deque<std::pair<uint64_t, rclcpp::Time>>> recent_image_timestamps_;
     std::vector<std::unique_ptr<std::mutex>> buffer_mutexes_;
 
     // 동기화 버퍼
     struct SyncFrame {
         int camera_index;
         uint64_t timestamp_ns;
+        rclcpp::Time stamp;
         bool is_jpeg;
         std::vector<uint8_t> data;
         std::chrono::steady_clock::time_point received_time;
@@ -166,6 +173,7 @@ private:
 
     // 파라미터
     bool debug_mode_;
+    bool use_morai_timestamp_;
     bool publish_bbox_overlay_;
     int max_buffered_frames_;
     double frame_timeout_sec_;
@@ -176,7 +184,7 @@ private:
     double sync_timeout_sec_;
     double sync_window_ms_;
 
-    std::vector<std::map<uint64_t, cv::Mat>> overlay_images_;
+    std::vector<std::map<uint64_t, std::pair<cv::Mat, rclcpp::Time>>> overlay_images_;
     std::vector<std::map<uint64_t, std::vector<BoxObject>>> overlay_boxes_;
     std::mutex overlay_mutex_;
 
