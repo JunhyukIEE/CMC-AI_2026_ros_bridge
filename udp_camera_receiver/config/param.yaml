@@ -2,6 +2,11 @@
   ros__parameters:
     # 디버그 모드 (패킷 정보 출력)
     debug_mode: false
+    # false: 프레임 첫 UDP 패킷 수신 직후의 ROS 시각을 사용 (PC 간 시계 차이 회피).
+    # Image/CameraInfo/GT/overlay에 동일 적용. 촬영 시각은 아니며 전송 지연은 남음.
+    # true: 기존 MORAI 원본 시각 사용 (시뮬레이터와 ROS 시계 동기화 필요).
+    # 프레임 조립·multi-camera sync·BOX 매칭은 이 설정과 무관하게 원본 시각 사용.
+    use_morai_timestamp: false
     # bbox 위치 검증용 별도 image 토픽 (기본 비활성화)
     publish_bbox_overlay: false
 

@@ -197,6 +197,7 @@ void UdpCameraReceiver::loadParameters()
 {
     // 일반 파라미터
     this->declare_parameter<bool>("debug_mode", false);
+    this->declare_parameter<bool>("use_morai_timestamp", false);
     this->declare_parameter<bool>("publish_bbox_overlay", false);
     this->declare_parameter<int>("max_buffered_frames", 3);
     this->declare_parameter<double>("frame_timeout_sec", 1.0);
@@ -208,6 +209,7 @@ void UdpCameraReceiver::loadParameters()
     this->declare_parameter<double>("sync_window_ms", 30.0);  // 기본 30ms 윈도우
 
     this->get_parameter("debug_mode", debug_mode_);
+    this->get_parameter("use_morai_timestamp", use_morai_timestamp_);
     this->get_parameter("publish_bbox_overlay", publish_bbox_overlay_);
     this->get_parameter("max_buffered_frames", max_buffered_frames_);
     this->get_parameter("frame_timeout_sec", frame_timeout_sec_);
@@ -223,6 +225,9 @@ void UdpCameraReceiver::loadParameters()
     }
 
     RCLCPP_INFO(this->get_logger(), "Sync window: %.1f ms", sync_window_ms_);
+    RCLCPP_INFO(
+        get_logger(), "Camera ROS timestamp source: %s",
+        use_morai_timestamp_ ? "MORAI packet clock" : "first UDP packet reception (ROS clock)");
 
     // name이 설정된 camera_N만 활성 카메라로 로드한다.
     for (int config_index = 0; config_index <= kMaxCameraConfigIndex; ++config_index) {
@@ -544,7 +549,10 @@ void UdpCameraReceiver::receiveThread(int camera_index)
                                     (struct sockaddr*)&sender_addr, &sender_len);
 
         if (received > 0) {
-            processPacket(camera_index, buffer.data(), received);
+            // Stamp immediately after recvfrom, before parsing, assembly or decoding.
+            // This is userspace reception time, not the simulator exposure time.
+            const auto receive_stamp = this->now();
+            processPacket(camera_index, buffer.data(), received, receive_stamp);
         } else if (received < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
             RCLCPP_ERROR(this->get_logger(), "Error receiving data for camera %d: %s",
                         camera_index, strerror(errno));
@@ -554,7 +562,9 @@ void UdpCameraReceiver::receiveThread(int camera_index)
     RCLCPP_INFO(this->get_logger(), "Receive thread stopped for camera %d", camera_index);
 }
 
-void UdpCameraReceiver::processPacket(int camera_index, const uint8_t* data, size_t length)
+void UdpCameraReceiver::processPacket(
+    int camera_index, const uint8_t* data, size_t length,
+    const rclcpp::Time& receive_stamp)
 {
     PacketHeader header;
     if (!parseHeader(data, length, header)) {
@@ -615,6 +625,12 @@ void UdpCameraReceiver::processPacket(int camera_index, const uint8_t* data, siz
 
     FrameBuffer& frame = buffers[timestamp_ns];
     frame.timestamp_ns = timestamp_ns;
+    if (frame.received_packets == 0) {
+        // First observed valid fragment, even if UDP index 0 arrives later.
+        // Keep the original timestamp_ns as the assembly/sync/BOX matching key.
+        frame.stamp = use_morai_timestamp_ ?
+            rclcpp::Time(static_cast<int64_t>(timestamp_ns), RCL_ROS_TIME) : receive_stamp;
+    }
     frame.last_update = std::chrono::steady_clock::now();
 
     if (frame.packet_received.size() <= header.packet_index || !frame.packet_received[header.packet_index]) {
@@ -652,12 +668,13 @@ void UdpCameraReceiver::processPacket(int camera_index, const uint8_t* data, siz
         if (complete) {
             if (is_box) {
                 uint64_t image_timestamp_ns = 0;
+                rclcpp::Time image_stamp;
                 uint64_t best_difference = std::numeric_limits<uint64_t>::max();
                 auto& image_timestamps = recent_image_timestamps_[camera_index];
                 auto best = image_timestamps.end();
                 for (auto it = image_timestamps.begin(); it != image_timestamps.end(); ++it) {
-                    const uint64_t difference = *it > timestamp_ns ?
-                        *it - timestamp_ns : timestamp_ns - *it;
+                    const uint64_t difference = it->first > timestamp_ns ?
+                        it->first - timestamp_ns : timestamp_ns - it->first;
                     if (difference < best_difference) {
                         best_difference = difference;
                         best = it;
@@ -666,7 +683,8 @@ void UdpCameraReceiver::processPacket(int camera_index, const uint8_t* data, siz
                 const uint64_t tolerance_ns =
                     static_cast<uint64_t>(bbox_match_tolerance_ms_ * 1000000.0);
                 if (best != image_timestamps.end() && best_difference <= tolerance_ns) {
-                    image_timestamp_ns = *best;
+                    image_timestamp_ns = best->first;
+                    image_stamp = best->second;
                     image_timestamps.erase(best);
                 }
                 buffers.erase(timestamp_ns);
@@ -679,12 +697,12 @@ void UdpCameraReceiver::processPacket(int camera_index, const uint8_t* data, siz
                         static_cast<unsigned long long>(timestamp_ns));
                     return;
                 }
-                publishBoxes(camera_index, timestamp_ns, image_timestamp_ns, assembled_data);
+                publishBoxes(camera_index, timestamp_ns, image_timestamp_ns, assembled_data, image_stamp);
                 return;
             }
 
             auto& image_timestamps = recent_image_timestamps_[camera_index];
-            image_timestamps.push_back(frame.timestamp_ns);
+            image_timestamps.emplace_back(frame.timestamp_ns, frame.stamp);
             while (image_timestamps.size() > 10) image_timestamps.pop_front();
 
             if (enable_sync_) {
@@ -692,6 +710,7 @@ void UdpCameraReceiver::processPacket(int camera_index, const uint8_t* data, siz
                 SyncFrame sync_frame;
                 sync_frame.camera_index = camera_index;
                 sync_frame.timestamp_ns = frame.timestamp_ns;
+                sync_frame.stamp = frame.stamp;
                 sync_frame.is_jpeg = frame.is_jpeg;
                 sync_frame.data = std::move(assembled_data);
                 sync_frame.received_time = std::chrono::steady_clock::now();
@@ -706,7 +725,7 @@ void UdpCameraReceiver::processPacket(int camera_index, const uint8_t* data, siz
                 task.timestamp_ns = frame.timestamp_ns;
                 task.is_jpeg = frame.is_jpeg;
                 task.data = std::move(assembled_data);
-                task.stamp = rclcpp::Time(static_cast<int64_t>(frame.timestamp_ns), RCL_ROS_TIME);
+                task.stamp = frame.stamp;
                 queueDecodeTask(std::move(task));
             }
         }
@@ -716,7 +735,7 @@ void UdpCameraReceiver::processPacket(int camera_index, const uint8_t* data, siz
 
 void UdpCameraReceiver::publishBoxes(
     int camera_index, uint64_t box_timestamp_ns, uint64_t image_timestamp_ns,
-    const std::vector<uint8_t>& data)
+    const std::vector<uint8_t>& data, const rclcpp::Time& image_stamp)
 {
     std::vector<BoxObject> objects;
     std::string error;
@@ -736,8 +755,7 @@ void UdpCameraReceiver::publishBoxes(
     }
 
     vision_msgs::msg::Detection2DArray message;
-    message.header.stamp = rclcpp::Time(
-        static_cast<int64_t>(image_timestamp_ns), RCL_ROS_TIME);
+    message.header.stamp = image_stamp;
     message.header.frame_id = cameras_[camera_index].name;
     message.detections.reserve(objects.size());
     for (const auto& object : objects) {
@@ -796,6 +814,7 @@ void UdpCameraReceiver::publishBoxes(
 void UdpCameraReceiver::publishOverlayIfReady(int camera_index, uint64_t timestamp_ns)
 {
     cv::Mat image;
+    rclcpp::Time image_stamp;
     std::vector<BoxObject> objects;
     {
         std::lock_guard<std::mutex> lock(overlay_mutex_);
@@ -803,7 +822,8 @@ void UdpCameraReceiver::publishOverlayIfReady(int camera_index, uint64_t timesta
         auto boxes_it = overlay_boxes_[camera_index].find(timestamp_ns);
         if (image_it == overlay_images_[camera_index].end() ||
             boxes_it == overlay_boxes_[camera_index].end()) return;
-        image = std::move(image_it->second);
+        image = std::move(image_it->second.first);
+        image_stamp = image_it->second.second;
         objects = std::move(boxes_it->second);
         overlay_images_[camera_index].erase(image_it);
         overlay_boxes_[camera_index].erase(boxes_it);
@@ -820,7 +840,7 @@ void UdpCameraReceiver::publishOverlayIfReady(int camera_index, uint64_t timesta
             cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255, 0, 0), 1);
     }
     std_msgs::msg::Header header;
-    header.stamp = rclcpp::Time(static_cast<int64_t>(timestamp_ns), RCL_ROS_TIME);
+    header.stamp = image_stamp;
     header.frame_id = cameras_[camera_index].name;
     overlay_publishers_[camera_index]->publish(*cv_bridge::CvImage(header, "rgb8", image).toImageMsg());
 }
@@ -874,8 +894,7 @@ void UdpCameraReceiver::synchronizerThread()
                         task.timestamp_ns = frame.timestamp_ns;
                         task.is_jpeg = frame.is_jpeg;
                         task.data = std::move(frame.data);
-                        task.stamp = rclcpp::Time(
-                            static_cast<int64_t>(frame.timestamp_ns), RCL_ROS_TIME);
+                        task.stamp = frame.stamp;
                         tasks_to_queue.push_back(std::move(task));
                     }
                     it = synchronized_frames_.erase(it);
@@ -976,7 +995,7 @@ void UdpCameraReceiver::decodeWorkerThread(int worker_id)
                     {
                         std::lock_guard<std::mutex> lock(overlay_mutex_);
                         auto& images = overlay_images_[task.camera_index];
-                        images[task.timestamp_ns] = std::move(overlay_image);
+                        images[task.timestamp_ns] = {std::move(overlay_image), task.stamp};
                         while (images.size() > static_cast<size_t>(max_buffered_frames_)) {
                             images.erase(images.begin());
                         }
@@ -1063,7 +1082,7 @@ void UdpCameraReceiver::decodeWorkerThread(int worker_id)
             {
                 std::lock_guard<std::mutex> lock(overlay_mutex_);
                 auto& images = overlay_images_[task.camera_index];
-                images[task.timestamp_ns] = std::move(overlay_image);
+                images[task.timestamp_ns] = {std::move(overlay_image), task.stamp};
                 while (images.size() > static_cast<size_t>(max_buffered_frames_)) {
                     images.erase(images.begin());
                 }
