@@ -252,7 +252,7 @@ def parse_args():
     parser.add_argument("--target-speed", type=float, default=35.0, help="braking start speed in m/s")
     parser.add_argument("--simulator-ip", default="192.168.0.27")
     parser.add_argument("--port", type=int, default=9091)
-    parser.add_argument("--bind-ip", default="192.168.0.37")
+    parser.add_argument("--bind-ip", default="192.168.0.10")
     parser.add_argument("--detail-port", type=int, default=1024)
     parser.add_argument("--rate", type=float, default=50.0)
     parser.add_argument("--timeout", type=float, default=180.0)
