@@ -24,6 +24,17 @@ constexpr double MAX_CONTROLLER_DT_SEC = 0.1;
 constexpr double STANDSTILL_TARGET_SPEED_MPS = 0.05;
 constexpr double STANDSTILL_CURRENT_SPEED_MPS = 0.1;
 
+constexpr bool should_warn_speed(bool enabled, double velocity_mps)
+{
+    return enabled && (velocity_mps > 60.0 / 3.6 || velocity_mps < -60.0 / 3.6);
+}
+
+static_assert(!should_warn_speed(true, 59.99 / 3.6));
+static_assert(!should_warn_speed(true, 60.0 / 3.6));
+static_assert(should_warn_speed(true, 60.01 / 3.6));
+static_assert(should_warn_speed(true, -60.01 / 3.6));
+static_assert(!should_warn_speed(false, 80.0 / 3.6));
+
 struct PedalCommands {
     float throttle;
     float brake;
@@ -97,8 +108,9 @@ public:
     MoraiSenderNode() : Node("morai_sender_node")
     {
         // ROS 파라미터 선언
-        this->declare_parameter<std::string>("simulator_ip", "192.168.0.27");
+        this->declare_parameter<std::string>("simulator_ip", "192.168.0.1");
         this->declare_parameter<int>("cmd_udp_port", 9091);
+        this->declare_parameter<bool>("speed_debug", true);
 
         const auto nonnegative_parameter = [this](const char * name, double default_value) {
             this->declare_parameter<double>(name, default_value);
@@ -206,6 +218,14 @@ private:
         current_velocity_mps_ = msg->longitudinal_velocity;
         last_velocity_receive_time_ = std::chrono::steady_clock::now();
         has_current_velocity_ = true;
+
+        if (should_warn_speed(this->get_parameter("speed_debug").as_bool(), current_velocity_mps_)) {
+            const double speed_kph = std::abs(current_velocity_mps_) * 3.6;
+            RCLCPP_WARN_THROTTLE(
+                this->get_logger(), *this->get_clock(), 1000,
+                "[SPEED DEBUG] Speed limit exceeded: %.3f km/h > 60.000 km/h (+%.3f km/h)",
+                speed_kph, speed_kph - 60.0);
+        }
     }
 
     void reset_speed_controller()
