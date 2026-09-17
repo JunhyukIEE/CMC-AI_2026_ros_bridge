@@ -237,7 +237,7 @@ void UdpCameraReceiver::loadParameters()
         if (name.empty()) continue;
 
         CameraConfig config;
-        this->declare_parameter<std::string>(prefix + "ip", "192.168.0.37");
+        this->declare_parameter<std::string>(prefix + "ip", "192.168.0.10");
         this->declare_parameter<int>(prefix + "port", 9001 + config_index);
         this->declare_parameter<std::string>(
             prefix + "topic_name",

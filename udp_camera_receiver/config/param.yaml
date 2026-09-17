@@ -28,7 +28,7 @@
     # 사용할 camera_N 블록만 주석 해제
     camera_0:
       name: "front_camera/camera_optical_link"
-      ip: "192.168.0.37"
+      ip: "192.168.0.10"
       port: 9001
       topic_name: "/sensing/camera/camera0/image_raw"
       width: 1280
@@ -39,7 +39,7 @@
 
     camera_1:
       name: "left_camera/camera_optical_link"
-      ip: "192.168.0.37"
+      ip: "192.168.0.10"
       port: 9002
       topic_name: "/sensing/camera/camera1/image_raw"
       width: 640
@@ -50,7 +50,7 @@
 
     camera_2:
       name: "right_camera/camera_optical_link"
-      ip: "192.168.0.37"
+      ip: "192.168.0.10"
       port: 9003
       topic_name: "/sensing/camera/camera2/image_raw"
       width: 640
@@ -61,7 +61,7 @@
 
     # camera_3:
     #   name: "rear_camera/camera_optical_link"
-    #   ip: "192.168.0.37"
+    #   ip: "192.168.0.10"
     #   port: 9013
     #   topic_name: "/sensing/camera/camera3/image_raw"
     #   width: 1280
@@ -72,7 +72,7 @@
 
     # camera_4:
     #   name: "rear_left_camera/camera_optical_link"
-    #   ip: "192.168.0.37"
+    #   ip: "192.168.0.10"
     #   port: 9014
     #   topic_name: "/sensing/camera/camera4/image_raw"
     #   width: 640
@@ -83,7 +83,7 @@
 
     # camera_5:
     #   name: "rear_right_camera/camera_optical_link"
-    #   ip: "192.168.0.37"
+    #   ip: "192.168.0.10"
     #   port: 9015
     #   topic_name: "/sensing/camera/camera5/image_raw"
     #   width: 640
@@ -94,7 +94,7 @@
 
     camera_6:
       name: "traffic_light_left_camera/camera_optical_link"
-      ip: "192.168.0.37"
+      ip: "192.168.0.10"
       port: 9004
       topic_name: "/sensing/camera/camera7/image_raw/compressed"
       width: 640

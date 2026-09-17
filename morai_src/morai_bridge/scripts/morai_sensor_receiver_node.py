@@ -47,7 +47,7 @@ class MoraiSensorReceiver(Node):
     def __init__(self):
         super().__init__("morai_sensor_receiver_node")
 
-        self.declare_parameter("bind_ip", "192.168.0.37")
+        self.declare_parameter("bind_ip", "192.168.0.10")
         self.declare_parameter("collision_port", 9011)
         self.declare_parameter("lidar_port", 19005)
         self.declare_parameter("gnss_port", 9006)
