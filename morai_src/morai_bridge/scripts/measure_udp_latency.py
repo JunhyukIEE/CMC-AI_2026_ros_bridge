@@ -218,7 +218,7 @@ def capture(args, output):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--sim-ip", default="192.168.0.27")
+    parser.add_argument("--sim-ip", default="192.168.0.1")
     parser.add_argument("--interface", default="enp8s0", help="Prefer one physical interface; any may duplicate traffic")
     parser.add_argument("--duration", type=float, default=60)
     parser.add_argument("--label", default="baseline")

@@ -7,12 +7,12 @@ Python 표준 라이브러리, 시스템 `tcpdump`, `ping`을 사용합니다. �
 ## 실행
 
 브릿지와 시뮬레이터를 켜고 실제 주행 중 측정합니다. 네트워크 인터페이스는
-`ip route get 192.168.0.27`의 `dev` 값을 사용하세요.
+`ip route get 192.168.0.1`의 `dev` 값을 사용하세요.
 
 ```bash
 cd /home/ljh/workspace/CMC-AI_2026
 sudo /usr/bin/python3 src/morai_src/morai_bridge/scripts/measure_udp_latency.py \
-  --sim-ip 192.168.0.27 --interface enp8s0 --duration 60 --label current_pc
+  --sim-ip 192.168.0.1 --interface enp8s0 --duration 60 --label current_pc
 ```
 
 대회 PC로 바꾸면 목적지 IP를 바꾸고 `--label competition_pc`로 같은 시험을 합니다.
@@ -32,7 +32,7 @@ sudo /usr/bin/python3 src/morai_src/morai_bridge/scripts/measure_udp_latency.py 
 
 ```bash
 python3 src/morai_src/morai_bridge/scripts/measure_udp_latency.py \
-  --sim-ip 192.168.0.27 --pcap /absolute/path/headers.pcap --label recheck
+  --sim-ip 192.168.0.1 --pcap /absolute/path/headers.pcap --label recheck
 ```
 
 ## 숫자를 해석하는 방법

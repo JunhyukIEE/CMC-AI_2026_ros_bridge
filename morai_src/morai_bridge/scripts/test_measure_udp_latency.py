@@ -12,7 +12,7 @@ import tempfile
 from measure_udp_latency import analyze, packet_stamp, pcap_packets, udp_header
 
 
-def ethernet(payload, source="192.168.0.27", destination="192.168.0.37", port=9001):
+def ethernet(payload, source="192.168.0.1", destination="192.168.0.10", port=9001):
     udp = struct.pack("!HHHH", 50000, port, len(payload) + 8, 0) + payload
     ip = struct.pack("!BBHHHBBH4s4s", 0x45, 0, 20 + len(udp), 0, 0, 64, 17, 0,
                      socket.inet_aton(source), socket.inet_aton(destination))
@@ -53,10 +53,10 @@ def main():
             stream.write(struct.pack("<IHHIIII", 0xA1B2C3D4, 2, 4, 0, 0, 128, 1))
             for usec, packet in ((10_000, frame), (11_000, ethernet(chunk)),
                                  (70_000, ethernet(next_frame)),
-                                 (75_000, ethernet(b"#MoraiCtrlCmd$", "192.168.0.37", "192.168.0.27", 9091))):
+                                 (75_000, ethernet(b"#MoraiCtrlCmd$", "192.168.0.10", "192.168.0.1", 9091))):
                 stream.write(struct.pack("<IIII", stamp, usec, len(packet), len(packet)))
                 stream.write(packet)
-        result = analyze(pcap, output, "192.168.0.27", clock_offset_ms=5, gap_ms=55)
+        result = analyze(pcap, output, "192.168.0.1", clock_offset_ms=5, gap_ms=55)
         camera = result["RX:9001:MOR"]
         assert camera["observed_datagrams"] == 3 and camera["samples"] == 2
         assert camera["interval_ms"]["max"] == 60

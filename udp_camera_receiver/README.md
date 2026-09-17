@@ -65,7 +65,7 @@ ros2 launch udp_camera_receiver udp_camera_receiver.launch.py
     # 카메라 0 설정
     camera_0:
       name: "front_camera"
-      ip: "192.168.0.37"
+      ip: "192.168.0.10"
       port: 9001
       topic_name: "/camera/front/image_raw"
       width: 640
@@ -75,7 +75,7 @@ ros2 launch udp_camera_receiver udp_camera_receiver.launch.py
     # 카메라 1 설정
     camera_1:
       name: "rear_camera"
-      ip: "192.168.0.37"
+      ip: "192.168.0.10"
       port: 9002
       topic_name: "/camera/rear/image_raw"
       width: 640

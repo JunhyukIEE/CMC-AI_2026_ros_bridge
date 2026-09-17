@@ -5,7 +5,7 @@ import ipaddress
 import socket
 
 
-DEFAULT_SIMULATOR_IP = "192.168.0.27"
+DEFAULT_SIMULATOR_IP = "192.168.0.1"
 RESET_PORT = 5005
 RESET_MESSAGE = b"LOAD_FML"
 
