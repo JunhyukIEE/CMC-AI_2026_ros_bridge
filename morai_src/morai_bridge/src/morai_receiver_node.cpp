@@ -8,7 +8,11 @@
 #include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
 
 #include <chrono>
+#include <cerrno>
+#include <cstring>
 #include <iostream>
+#include <mutex>
+#include <stdexcept>
 #include <string>
 #include <vector>
 #include <thread>
@@ -93,7 +97,10 @@ public:
     {
         // 파라미터 선언
         this->declare_parameter<int>("udp_port", 9000);
-
+        velocity_timeout_sec_ = this->declare_parameter<double>("velocity_timeout_sec", 0.2);
+        if (!std::isfinite(velocity_timeout_sec_) || velocity_timeout_sec_ <= 0.0) {
+            throw std::invalid_argument("velocity_timeout_sec must be finite and positive");
+        }
 
         // 파라미터 값 가져오기
         udp_port_ = this->get_parameter("udp_port").as_int();
@@ -103,6 +110,10 @@ public:
         velocity_status_pub_ =
             this->create_publisher<autoware_vehicle_msgs::msg::VelocityReport>(
                 "/vehicle/status/velocity_status", 10);
+        // Only real UDP samples reach the PID; synthetic zeros must not refresh its watchdog.
+        raw_velocity_pub_ =
+            this->create_publisher<autoware_vehicle_msgs::msg::VelocityReport>(
+                "/morai_bridge/vehicle_status/velocity_raw", 1);
         steering_status_pub_ =
             this->create_publisher<autoware_vehicle_msgs::msg::SteeringReport>(
                 "/vehicle/status/steering_status", 10);
@@ -119,6 +130,9 @@ public:
         operation_mode_availability_timer_ = this->create_wall_timer(
             std::chrono::milliseconds(100),
             std::bind(&MoraiReceiverNode::publish_operation_mode_availability, this));
+        velocity_watchdog_timer_ = this->create_wall_timer(
+            std::chrono::milliseconds(20),
+            std::bind(&MoraiReceiverNode::check_velocity_timeout, this));
 
         RCLCPP_INFO(this->get_logger(), "MoraiBridgeNode has been started.");
         RCLCPP_INFO(this->get_logger(), "Listening for UDP packets on port: %d", udp_port_);
@@ -136,6 +150,30 @@ public:
     }
 
 private:
+    void check_velocity_timeout()
+    {
+        // Serialize timeout publication with real samples so a late zero cannot follow recovery.
+        std::lock_guard<std::mutex> lock(velocity_mutex_);
+        if (std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - last_udp_receive_time_).count() <=
+            velocity_timeout_sec_) {
+            return;
+        }
+        velocity_timed_out_ = true;
+        auto zero_velocity = autoware_vehicle_msgs::msg::VelocityReport();
+        zero_velocity.header.stamp = this->now();
+        zero_velocity.header.frame_id = "base_link";
+        // Simulator-pause fallback, not a measurement or proof that the vehicle has stopped.
+        zero_velocity.longitudinal_velocity = 0.0;
+        zero_velocity.lateral_velocity = 0.0;
+        zero_velocity.heading_rate = 0.0;
+        velocity_status_pub_->publish(zero_velocity);
+        RCLCPP_WARN_THROTTLE(
+            this->get_logger(), *this->get_clock(), 2000,
+            "Vehicle UDP unavailable for %.3f s; publishing synthetic zero velocity (raw stopped).",
+            velocity_timeout_sec_);
+    }
+
     void publish_operation_mode_availability()
     {
         auto availability = tier4_system_msgs::msg::OperationModeAvailability();
@@ -160,6 +198,14 @@ private:
             RCLCPP_ERROR(this->get_logger(), "UDP socket creation failed");
             return;
         }
+        // Allow shutdown even while the simulator has stopped sending packets.
+        const timeval receive_timeout{0, 100000};
+        if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO,
+                &receive_timeout, sizeof(receive_timeout)) < 0) {
+            RCLCPP_ERROR(this->get_logger(), "Failed to set UDP receive timeout");
+            close(sockfd);
+            return;
+        }
 
         // 서버 주소 구조체 초기화
         memset(&servaddr, 0, sizeof(servaddr));
@@ -182,12 +228,15 @@ private:
             ssize_t n = recvfrom(sockfd, (char *)buffer, sizeof(buffer), MSG_WAITALL, (struct sockaddr *)&cliaddr, &len);
 
             if (n < 0) {
+                if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+                    continue;
+                }
                 RCLCPP_WARN(this->get_logger(), "recvfrom error");
                 continue;
             }
 
             // 패킷 크기 검사 (헤더 + 데이터)
-            if (n < (sizeof(MoraiUDPHeader) + sizeof(EgoVehicleStatusUDP))) {
+            if (static_cast<size_t>(n) < sizeof(MoraiUDPHeader) + sizeof(EgoVehicleStatusUDP)) {
                 RCLCPP_WARN(this->get_logger(), "Received a packet smaller than expected size. Got %ld bytes.", n);
                 continue;
             }
@@ -201,6 +250,13 @@ private:
                 RCLCPP_WARN(this->get_logger(), "Received packet with invalid header.");
                 continue;
             }
+            if (!std::isfinite(status->velocity_x) || !std::isfinite(status->velocity_y) ||
+                !std::isfinite(status->angular_velocity_z)) {
+                RCLCPP_WARN_THROTTLE(
+                    this->get_logger(), *this->get_clock(), 2000,
+                    "Ignoring non-finite vehicle UDP velocity.");
+                continue;
+            }
             
             publish_vehicle_status(status);
         }
@@ -210,6 +266,12 @@ private:
 
     void publish_vehicle_status(const EgoVehicleStatusUDP* status)
     {
+        std::lock_guard<std::mutex> lock(velocity_mutex_);
+        last_udp_receive_time_ = std::chrono::steady_clock::now();
+        if (velocity_timed_out_) {
+            RCLCPP_INFO(this->get_logger(), "Vehicle UDP recovered; publishing measured velocity.");
+            velocity_timed_out_ = false;
+        }
         const auto stamp = this->now();
 
         auto velocity_status = autoware_vehicle_msgs::msg::VelocityReport();
@@ -219,6 +281,7 @@ private:
         velocity_status.lateral_velocity = status->velocity_y * 0.277778;
         velocity_status.heading_rate = status->angular_velocity_z * M_PI / 180.0;
         velocity_status_pub_->publish(velocity_status);
+        raw_velocity_pub_->publish(velocity_status);
 
         auto steering_status = autoware_vehicle_msgs::msg::SteeringReport();
         steering_status.stamp = stamp;
@@ -239,6 +302,7 @@ private:
     // ROS 관련 멤버
     rclcpp::Publisher<autoware_vehicle_msgs::msg::VelocityReport>::SharedPtr
         velocity_status_pub_;
+    rclcpp::Publisher<autoware_vehicle_msgs::msg::VelocityReport>::SharedPtr raw_velocity_pub_;
     rclcpp::Publisher<autoware_vehicle_msgs::msg::SteeringReport>::SharedPtr
         steering_status_pub_;
     rclcpp::Publisher<autoware_vehicle_msgs::msg::GearReport>::SharedPtr
@@ -248,6 +312,11 @@ private:
     rclcpp::Publisher<tier4_system_msgs::msg::OperationModeAvailability>::SharedPtr
         operation_mode_availability_pub_;
     rclcpp::TimerBase::SharedPtr operation_mode_availability_timer_;
+    rclcpp::TimerBase::SharedPtr velocity_watchdog_timer_;
+    std::mutex velocity_mutex_;
+    std::chrono::steady_clock::time_point last_udp_receive_time_ = std::chrono::steady_clock::now();
+    double velocity_timeout_sec_ = 0.2;
+    bool velocity_timed_out_ = false;
 
     // UDP 관련 멤버
     std::thread udp_thread_;

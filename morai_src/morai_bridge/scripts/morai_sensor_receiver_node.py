@@ -1,12 +1,15 @@
 #!/usr/bin/python3
 
+import copy
 import math
 import socket
 import struct
 import time
 
 import rclpy
+from autoware_vehicle_msgs.msg import VelocityReport
 from morai_msgs.msg import CollisionData, ObjectStatus
+from rclpy.clock import Clock, ClockType
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Imu, LaserScan, NavSatFix, NavSatStatus
@@ -55,6 +58,15 @@ class MoraiSensorReceiver(Node):
         self.declare_parameter("imu_frame", "imu")
         self.declare_parameter("slam_mode", True)
         self.declare_parameter("imu_yaw_offset_deg", -1.347045)
+        self.declare_parameter("imu_timeout_sec", 0.2)
+        self.declare_parameter("velocity_timeout_sec", 0.2)
+
+        self.imu_timeout_sec = self.get_parameter("imu_timeout_sec").value
+        self.velocity_timeout_sec = self.get_parameter("velocity_timeout_sec").value
+        for name in ("imu_timeout_sec", "velocity_timeout_sec"):
+            value = self.get_parameter(name).value
+            if not math.isfinite(value) or value <= 0.0:
+                raise ValueError(f"{name} must be finite and positive")
 
         bind_ip = self.get_parameter("bind_ip").value
         self.map_frame = self.get_parameter("map_frame").value
@@ -92,6 +104,20 @@ class MoraiSensorReceiver(Node):
         self.imu_rate_started = time.monotonic()
         self.imu_raw_count = 0
         self.imu_publish_count = 0
+        self.imu_fallback_count = 0
+        self.last_imu_receive_time = None
+        self.last_velocity_receive_time = None
+        self.last_real_imu = None
+        self.imu_fallback_active = False
+        # Public velocity includes synthetic zeros; only real UDP may refresh this clock.
+        self.velocity_sub = self.create_subscription(
+            VelocityReport, "/morai_bridge/vehicle_status/velocity_raw",
+            self._receive_raw_velocity, 1
+        )
+        self.watchdog_clock = Clock(clock_type=ClockType.STEADY_TIME)
+        self.imu_watchdog_timer = self.create_timer(
+            0.02, self._check_imu_timeout, clock=self.watchdog_clock
+        )
         self.last_altitude = 0.0
         self.timer = self.create_timer(0.001, self._poll)
         self.imu_rate_timer = self.create_timer(10.0, self._report_imu_rate)
@@ -219,6 +245,8 @@ class MoraiSensorReceiver(Node):
         values = IMU.unpack(data)
         if not values[0].startswith(b"#") or values[-1] != b"\r\n":
             raise ValueError("bad header or tail")
+        if not all(math.isfinite(value) for value in values[7:17]):
+            raise ValueError("nonfinite IMU orientation, angular velocity or acceleration")
 
         self.imu_raw_count += 1
         msg = Imu()
@@ -253,18 +281,58 @@ class MoraiSensorReceiver(Node):
         )
         msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z = values[11:14]
         msg.linear_acceleration.x, msg.linear_acceleration.y, msg.linear_acceleration.z = values[14:17]
+        self.last_imu_receive_time = time.monotonic()
+        self.last_real_imu = msg
         self.imu_pub.publish(msg)
         self.imu_publish_count += 1
+
+    def _receive_raw_velocity(self, msg):
+        if all(math.isfinite(value) for value in (
+            msg.longitudinal_velocity, msg.lateral_velocity, msg.heading_rate
+        )):
+            self.last_velocity_receive_time = time.monotonic()
+
+    def _check_imu_timeout(self):
+        # Never invent an initial attitude or infer a simulator pause from IMU loss alone.
+        if self.last_real_imu is None or self.last_velocity_receive_time is None:
+            return
+        now = time.monotonic()
+        imu_age = now - self.last_imu_receive_time
+        velocity_age = now - self.last_velocity_receive_time
+        if imu_age <= self.imu_timeout_sec or velocity_age <= self.velocity_timeout_sec:
+            if self.imu_fallback_active:
+                self.get_logger().info("Real input resumed; stopped synthetic zero-angular IMU")
+                self.imu_fallback_active = False
+            return
+
+        # shortcut: simultaneous UDP loss is treated as simulator pause, not proof of a stop.
+        # Keep the last attitude/acceleration (including gravity); only zero angular velocity.
+        # This is synthetic data, and must never refresh either real-input receive clock.
+        msg = copy.deepcopy(self.last_real_imu)
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.angular_velocity.x = 0.0
+        msg.angular_velocity.y = 0.0
+        msg.angular_velocity.z = 0.0
+        self.imu_pub.publish(msg)
+        self.imu_fallback_active = True
+        self.imu_fallback_count += 1
+        self.get_logger().warning(
+            f"IMU and vehicle UDP stale ({imu_age:.3f}s / {velocity_age:.3f}s); "
+            "publishing synthetic zero-angular IMU for simulator pause",
+            throttle_duration_sec=2.0, throttle_time_source_type=self.watchdog_clock
+        )
 
     def _report_imu_rate(self):
         elapsed = time.monotonic() - self.imu_rate_started
         self.get_logger().info(
             f"IMU rates: raw_udp={self.imu_raw_count / elapsed:.2f} Hz, "
-            f"published={self.imu_publish_count / elapsed:.2f} Hz"
+            f"published={self.imu_publish_count / elapsed:.2f} Hz, "
+            f"synthetic={self.imu_fallback_count / elapsed:.2f} Hz"
         )
         self.imu_rate_started = time.monotonic()
         self.imu_raw_count = 0
         self.imu_publish_count = 0
+        self.imu_fallback_count = 0
 
 
 def main(args=None):
@@ -272,9 +340,12 @@ def main(args=None):
     node = MoraiSensorReceiver()
     try:
         rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":

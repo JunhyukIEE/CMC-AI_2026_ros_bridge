@@ -164,11 +164,14 @@ public:
                 std::bind(&MoraiSenderNode::gear_cmd_callback, this, _1));
         velocity_subscription_ =
             this->create_subscription<autoware_vehicle_msgs::msg::VelocityReport>(
-                "/vehicle/status/velocity_status", 1,
+                "/morai_bridge/vehicle_status/velocity_raw", 1,
                 std::bind(&MoraiSenderNode::velocity_status_callback, this, _1));
 
         // UDP 소켓 초기화
         init_udp_socket();
+        velocity_watchdog_timer_ = this->create_wall_timer(
+            std::chrono::milliseconds(20),
+            std::bind(&MoraiSenderNode::check_velocity_timeout, this));
 
         RCLCPP_INFO(this->get_logger(), "MoraiSenderNode has been started.");
         RCLCPP_INFO(
@@ -186,6 +189,27 @@ public:
     }
 
 private:
+    bool velocity_is_stale(std::chrono::steady_clock::time_point now) const
+    {
+        return !has_current_velocity_ ||
+               std::chrono::duration<double>(now - last_velocity_receive_time_).count() >
+               velocity_timeout_sec_;
+    }
+
+    void check_velocity_timeout()
+    {
+        // Do not take control before the first control_cmd. Afterwards, even silence on both
+        // input topics must overwrite the last pedal command; no control callback is needed.
+        if (!has_control_command_ || !velocity_is_stale(std::chrono::steady_clock::now())) {
+            return;
+        }
+        reset_speed_controller();
+        send_pedal_command({0.0f, 0.0f}, last_steering_command_);
+        RCLCPP_WARN_THROTTLE(
+            this->get_logger(), *this->get_clock(), 2000,
+            "Real vehicle velocity unavailable or stale; watchdog sending zero throttle and brake.");
+    }
+
     void gear_cmd_callback(
         const autoware_vehicle_msgs::msg::GearCommand::SharedPtr msg)
     {
@@ -215,8 +239,13 @@ private:
             return;
         }
 
+        const auto now = std::chrono::steady_clock::now();
+        // Also reset if recovery arrives before the timer observes the gap.
+        if (velocity_is_stale(now)) {
+            reset_speed_controller();
+        }
         current_velocity_mps_ = msg->longitudinal_velocity;
-        last_velocity_receive_time_ = std::chrono::steady_clock::now();
+        last_velocity_receive_time_ = now;
         has_current_velocity_ = true;
 
         if (should_warn_speed(this->get_parameter("speed_debug").as_bool(), current_velocity_mps_)) {
@@ -266,14 +295,14 @@ private:
         PedalCommands pedals{0.0f, 0.0f};
         const bool control_valid =
             std::isfinite(steering) && std::isfinite(target_velocity);
+        has_control_command_ = true;
+        last_steering_command_ = control_valid ? to_morai_steering(steering) : 0.0f;
         if (!control_valid) {
             reset_speed_controller();
             RCLCPP_WARN_THROTTLE(
                 this->get_logger(), *this->get_clock(), 2000,
                 "Non-finite control command; sending zero throttle and brake.");
-        } else if (!has_current_velocity_ ||
-            std::chrono::duration<double>(now - last_velocity_receive_time_).count() >
-                velocity_timeout_sec_) {
+        } else if (velocity_is_stale(now)) {
             reset_speed_controller();
             RCLCPP_WARN_THROTTLE(
                 this->get_logger(), *this->get_clock(), 2000,
@@ -324,6 +353,15 @@ private:
             }
         }
 
+        send_pedal_command(pedals, last_steering_command_);
+    }
+
+    void send_pedal_command(PedalCommands pedals, float steering_command)
+    {
+        if (send_sockfd_ < 0) {
+            return;
+        }
+
         // 1. 헤더 채우기
         MoraiUDPHeader header;
         header.start_char = '#';
@@ -345,8 +383,7 @@ private:
         cmd_packet.acceleration = 0.0f;
         cmd_packet.accel = pedals.throttle;
         cmd_packet.brake = pedals.brake;
-        cmd_packet.steering =
-            control_valid ? to_morai_steering(steering) : 0.0f;
+        cmd_packet.steering = steering_command;
 
         // 3. 전체 UDP 패킷 조립 (헤더 + 본문 + 테일)
         std::vector<unsigned char> packet_data;
@@ -372,6 +409,7 @@ private:
         gear_subscription_;
     rclcpp::Subscription<autoware_vehicle_msgs::msg::VelocityReport>::SharedPtr
         velocity_subscription_;
+    rclcpp::TimerBase::SharedPtr velocity_watchdog_timer_;
 
     // UDP 관련 멤버
     int send_sockfd_ = -1;
@@ -394,6 +432,8 @@ private:
     std::chrono::steady_clock::time_point previous_control_time_;
     bool has_current_velocity_ = false;
     bool has_previous_control_sample_ = false;
+    bool has_control_command_ = false;
+    float last_steering_command_ = 0.0f;
     uint8_t current_gear_ = 4;
 };
 
